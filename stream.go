@@ -13,6 +13,7 @@ void arv_set_stream_property_double(ArvStream *stream, char *property, double va
 }
 */
 import "C"
+
 import (
 	"errors"
 	"time"
@@ -46,16 +47,16 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 }
 
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
-	var b Buffer
+	var buf Buffer
 	var err error
 
-	b.buffer, err = C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
+	buf.buffer, err = C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
 
-	if b.buffer == nil {
+	if buf.buffer == nil {
 		return Buffer{}, errors.New("Aravis returned null pointer")
 	}
 
-	return b, err
+	return buf, err
 }
 
 func (s *Stream) Close() {
@@ -74,4 +75,8 @@ func (s *Stream) SetPropertyDouble(property string, value float32) {
 	cvalue := C.double(value)
 	C.arv_set_stream_property_double(s.stream, cprop, cvalue)
 	C.free(unsafe.Pointer(cprop))
+}
+
+func (s *Stream) IsNil() bool {
+	return s.stream == nil
 }

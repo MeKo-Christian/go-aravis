@@ -18,6 +18,7 @@ type BayerRG struct {
 func NewBayerRG(r image.Rectangle) *BayerRG {
 	w, h := r.Dx(), r.Dy()
 	pix := make([]uint8, w*h)
+
 	return &BayerRG{pix, w, r}
 }
 
@@ -25,7 +26,7 @@ func (p *BayerRG) ColorModel() color.Model { return color.RGBAModel }
 
 func (p *BayerRG) Bounds() image.Rectangle { return p.Rect }
 
-// At returns an RGBA pixel with simple nearest-neighbor debayering
+// At returns an RGBA pixel with simple nearest-neighbor debayering.
 func (p *BayerRG) At(x, y int) color.Color {
 	if x&1 == 0 && y&1 == 0 {
 		// top-left: red

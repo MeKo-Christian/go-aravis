@@ -8,12 +8,15 @@ import (
 
 func main() {
 	aravis.UpdateDeviceList()
-	n, err := aravis.GetNumDevices()
+
+	numDev, err := aravis.GetNumDevices()
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Devices:", n)
-	for i := uint(0); i < n; i++ {
+
+	log.Println("Devices:", numDev)
+
+	for i := range numDev {
 		log.Println(aravis.GetDeviceId(i))
 	}
 }

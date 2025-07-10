@@ -1,3 +1,3 @@
 module github.com/hybridgroup/go-aravis
 
-go 1.15
+go 1.23

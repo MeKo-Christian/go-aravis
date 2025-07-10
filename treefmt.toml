@@ -1,0 +1,48 @@
+# run with treefmt --allow-missing-formatter
+
+[global]
+excludes = [
+  # release please
+  "**/CHANGELOG.md",
+  "CHANGELOG.md",
+  # txt files
+  "**/*.txt",
+  # gitignore
+  "**/.gitignore",
+  # go.sum
+  "**/go.sum",
+  # go.mod
+  "**/go.mod",
+  # version.txt
+  "version.txt",
+]
+
+### Misc
+
+[formatter.prettier]
+command = "prettier"
+options = ["-w"]
+includes = [
+  "*.graphql",
+  "*.html",
+  "*.css",
+  "*.yaml",
+  "*.yml",
+  "*.js",
+  "*.json",
+  "*.md",
+]
+excludes = [".release-please-manifest.json"]
+
+### Go
+
+[formatter.gofumpt]
+command = "gofumpt"
+options = ["-w"]
+includes = ["*.go"]
+
+[formatter.gci]
+command = "gci"
+options = ["-w"]
+includes = ["*.go"]
+priority = 1        # run after gofumpt

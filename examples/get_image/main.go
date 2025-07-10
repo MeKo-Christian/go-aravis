@@ -12,8 +12,10 @@ import (
 	aravis "github.com/hybridgroup/go-aravis"
 )
 
-var exposureTime float64
-var gain float64
+var (
+	exposureTime float64
+	gain         float64
+)
 
 func serveJPEG(camera aravis.Camera) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +41,7 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+
 		stream.PushBuffer(buffer)
 
 		// Start acquisition
@@ -49,7 +52,11 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+
 		data, err := buffer.GetData()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 
 		// Image is in red-green bayer format
 		img := aravis.NewBayerRG(
@@ -75,6 +82,7 @@ func main() {
 
 	// Get devices
 	aravis.UpdateDeviceList()
+
 	if numDevices, err = aravis.GetNumDevices(); err != nil {
 		log.Fatal(err)
 	}
@@ -85,12 +93,13 @@ func main() {
 		return
 	}
 
-	for i := uint(0); i < numDevices; i++ {
-		name, _ := aravis.GetDeviceId(i)
+	for index := range numDevices {
+		name, _ := aravis.GetDeviceId(index)
+
 		camera, _ := aravis.NewCamera(name)
 		defer camera.Close()
 
-		http.Handle(fmt.Sprintf("/%d.jpg", i), serveJPEG(camera))
+		http.Handle(fmt.Sprintf("/%d.jpg", index), serveJPEG(camera))
 	}
 
 	log.Fatal(http.ListenAndServe(":8000", nil))

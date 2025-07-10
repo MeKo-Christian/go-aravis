@@ -43,6 +43,7 @@ static ArvStream* arv_camera_create_hp_stream(ArvCamera *camera, void *user_data
 }
 */
 import "C"
+
 import (
 	"unsafe"
 )
@@ -72,43 +73,43 @@ const (
 )
 
 func NewCamera(name string) (Camera, error) {
-	var c Camera
+	var cam Camera
 	var gerror *C.GError
 	var err error
 
 	cs := C.CString(name)
 	defer C.free(unsafe.Pointer(cs))
 
-	c.camera = C.arv_camera_new(cs, &gerror)
+	cam.camera = C.arv_camera_new(cs, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return c, err
+	return cam, err
 }
 
 func (c *Camera) CreateStream() (Stream, error) {
-	var s Stream
+	var stream Stream
 	var gerror *C.GError
 	var err error
 
 	switch c.ThreadPriority {
 	case ThreadPriorityRealtime:
-		s.stream = C.arv_camera_create_rt_stream(
+		stream.stream = C.arv_camera_create_rt_stream(
 			c.camera,
 			nil,
 			&gerror,
 		)
 
 	case ThreadPriorityHigh:
-		s.stream = C.arv_camera_create_hp_stream(
+		stream.stream = C.arv_camera_create_hp_stream(
 			c.camera,
 			nil,
 			&gerror,
 		)
 
 	default:
-		s.stream = C.arv_camera_create_stream(
+		stream.stream = C.arv_camera_create_stream(
 			c.camera,
 			nil,
 			nil,
@@ -120,13 +121,13 @@ func (c *Camera) CreateStream() (Stream, error) {
 		err = errorFromGError(gerror)
 	}
 
-	if s.stream == nil {
+	if stream.stream == nil {
 		return Stream{}, err
 	}
 
 	C.init_control_lost_cb(c.camera)
 
-	return s, err
+	return stream, err
 }
 
 func (c *Camera) GetDevice() (Device, error) {
@@ -173,6 +174,19 @@ func (c *Camera) GetDeviceId() (string, error) {
 	}
 
 	return C.GoString(id), err
+}
+
+func (c *Camera) GetDeviceSerialNumber() (string, error) {
+	var gerror *C.GError
+	var err error
+
+	serialNumber := C.arv_camera_get_device_serial_number(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+		return "", err
+	}
+
+	return C.GoString(serialNumber), err
 }
 
 func (c *Camera) GetSensorSize() (int, int, error) {
@@ -289,18 +303,18 @@ func (c *Camera) GetWidthBounds() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var min, max int
+	var minVal, maxVal int
 	C.arv_camera_get_width_bounds(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&min)),
-		(*C.gint)(unsafe.Pointer(&max)),
+		(*C.gint)(unsafe.Pointer(&minVal)),
+		(*C.gint)(unsafe.Pointer(&maxVal)),
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return int(min), int(max), err
+	return int(minVal), int(maxVal), err
 }
 
 func (c *Camera) SetBinning() {
@@ -311,18 +325,18 @@ func (c *Camera) GetBinning() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var min, max int
+	var minBin, maxBin int
 	C.arv_camera_get_binning(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&min)),
-		(*C.gint)(unsafe.Pointer(&max)),
+		(*C.gint)(unsafe.Pointer(&minBin)),
+		(*C.gint)(unsafe.Pointer(&maxBin)),
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return int(min), int(max), err
+	return int(minBin), int(maxBin), err
 }
 
 func (c *Camera) SetPixelFormat() {
@@ -429,17 +443,17 @@ func (c *Camera) GetFrameRateBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
 
-	var min, max float64
+	var minVal, maxVal float64
 	C.arv_camera_get_frame_rate_bounds(
 		c.camera,
-		(*C.double)(unsafe.Pointer(&min)),
-		(*C.double)(unsafe.Pointer(&max)),
+		(*C.double)(unsafe.Pointer(&minVal)),
+		(*C.double)(unsafe.Pointer(&maxVal)),
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
-	return float64(min), float64(max), err
+	return float64(minVal), float64(maxVal), err
 }
 
 func (c *Camera) SetLineRate(lineRate float64) {
@@ -612,18 +626,18 @@ func (c *Camera) GetGainBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
 
-	var min, max float64
+	var minVal, maxVal float64
 	C.arv_camera_get_gain_bounds(
 		c.camera,
-		(*C.double)(unsafe.Pointer(&min)),
-		(*C.double)(unsafe.Pointer(&max)),
+		(*C.double)(unsafe.Pointer(&minVal)),
+		(*C.double)(unsafe.Pointer(&maxVal)),
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return float64(min), float64(max), err
+	return float64(minVal), float64(maxVal), err
 }
 
 func (c *Camera) SetGainAuto() {

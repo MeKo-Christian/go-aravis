@@ -1,4 +1,4 @@
-FROM golang:1.15-buster AS build
+FROM golang:1.21-bullseye AS build
 WORKDIR /src
 
 # build essential, Gig-EV dependencies from manual, plus some util packages (vim, less)
@@ -13,7 +13,7 @@ RUN git clone https://github.com/AravisProject/aravis.git /opt/aravis && \
     cd /opt/aravis && \
     git checkout main && \
     ls -a && \
-    meson -Dviewer=disabled -Dintrospection=disabled -Dgst-plugin=disabled -Ddocumentation=disabled build && \
+    meson setup -Dviewer=disabled -Dintrospection=disabled -Dgst-plugin=disabled -Ddocumentation=disabled build && \
     cd build && \
     ninja && \
     ninja install && \
