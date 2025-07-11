@@ -130,7 +130,7 @@ fmt: ## Format code
 lint: ## Run linter
 	@echo "$(BOLD)Running linter...$(NC)"
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run --config .golangci.yml; \
+		golangci-lint run --config .golangci.toml; \
 	else \
 		echo "$(YELLOW)⚠ golangci-lint not found, running go vet instead$(NC)"; \
 		$(GO) vet ./...; \
