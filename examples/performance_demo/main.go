@@ -104,7 +104,7 @@ func main() {
 	buffers := make([]aravis.Buffer, numBuffers)
 
 	for i := range numBuffers {
-		buffer, err := aravis.NewBuffer(uint(payloadSize))
+		buffer, err := aravis.NewBuffer(payloadSize)
 		if err != nil {
 			log.Fatal(err)
 		}

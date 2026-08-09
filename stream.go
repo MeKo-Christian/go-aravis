@@ -53,7 +53,7 @@ func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	buf.buffer, err = C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
 
 	if buf.buffer == nil {
-		return Buffer{}, errors.New("Aravis returned null pointer")
+		return Buffer{}, errors.New("aravis returned a null pointer")
 	}
 
 	return buf, err

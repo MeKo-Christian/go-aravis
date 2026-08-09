@@ -1,89 +1,39 @@
 version = "2"
 
-[linters]
-default = 'all'
-disable = [
-    'depguard',
-    'gomoddirectives',
-    'ireturn',
-    'musttag',
-    'nlreturn',
-    'recvcheck',
-    'sqlclosecheck',
-    'wsl',
-]
-enable = [
-    "revive",
-]
+# Linter configuration tuned for this project: a small CGO binding around the
+# Aravis machine-vision library. We run the reliable default linters plus a few
+# high-value additions, rather than enabling every opinionated linter.
 
-[linters.settings]
-[linters.settings.tagliatelle]
-[linters.settings.tagliatelle.case]
-[linters.settings.tagliatelle.case.rules]
-envconfig = 'upperSnake'
-json = 'snake'
+[linters]
+default = "standard"
+enable = [
+    "bodyclose",
+    "misspell",
+    "revive",
+    "unconvert",
+    "unparam",
+]
 
 [linters.settings.revive]
+# The public API uses SCREAMING_SNAKE_CASE constants that mirror the Aravis C
+# enum names, so the Go var-naming rule does not apply here.
 [[linters.settings.revive.rules]]
 name = "var-naming"
 disabled = true
 
-[[linters.settings.revive.rules]]
-name = "file-length-limit"
-
-[[linters.settings.revive.rules.arguments]]
-max = 1500
-skip-comments = false
-skip-blank-lines = false
-[linters.settings.varnamelen]
-ignore-names = ['rx', 'tx', 'db', 'ok', 'mw', 'gw', 'rt', 'id']
-ignore-decls = ['w http.ResponseWriter', 'r *http.Request', 'g *Gateway']
-
-[linters.settings.wsl_v5]
-allow-first-in-block = true
-branch-max-lines = 2
-allow-whole-block = false
-disable = ["decl"]
-
 [linters.exclusions]
-generated = 'lax'
-presets = ['comments', 'common-false-positives', 'legacy', 'std-error-handling']
-paths = ['third_party$', 'builtin$', 'examples$']
+generated = "lax"
+presets = ["comments", "common-false-positives", "legacy", "std-error-handling"]
 
 [[linters.exclusions.rules]]
-linters = ['gosec']
-text = 'G601:'
+# Example programs are intentionally terse and ignore errors for readability.
+path = "examples/"
+linters = ["errcheck"]
 
 [[linters.exclusions.rules]]
-linters = ['errcheck']
-text = 'viper.Bind'
-
-[[linters.exclusions.rules]]
-linters = ['mnd']
-source = 'cobra.MinimumNArgs'
-
-[[linters.exclusions.rules]]
-linters = ['gochecknoglobals', 'gochecknoinits']
-path = 'cmd/.*\.go'
-
-[[linters.exclusions.rules]]
-linters = ['err113', 'wrapcheck']
-path = 'cmd/.*\.go'
-
-[[linters.exclusions.rules]]
-linters = ['godot']
-source = '^//+\s*language=\S+\s*$'
-
-[severity]
-default = 'warn'
-
-[[severity.rules]]
-linters = ['exhaustive', 'exhaustruct', 'godox']
-severity = 'info'
+# Test helpers frequently ignore errors from best-effort cleanup calls.
+path = "_test\\.go"
+linters = ["errcheck"]
 
 [formatters]
-enable = ['gci', 'gofumpt', 'goimports']
-
-[formatters.exclusions]
-generated = 'lax'
-paths = ['third_party$', 'builtin$', 'examples$']
+enable = ["gofmt", "goimports"]

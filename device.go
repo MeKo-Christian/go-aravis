@@ -8,6 +8,8 @@ void arv_set_node_feature_value(ArvDevice *device, char *name, char *value, GErr
 	ArvGcNode *feature;
 	feature = arv_device_get_feature (device, name);
 	if (feature == NULL) {
+		g_set_error (error, ARV_DEVICE_ERROR, ARV_DEVICE_ERROR_FEATURE_NOT_FOUND,
+			"feature '%s' not found", name);
 		return;
 	}
 	arv_gc_feature_node_set_value_from_string (ARV_GC_FEATURE_NODE (feature), value, error);

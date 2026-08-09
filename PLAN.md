@@ -19,10 +19,12 @@ progress.
   declare `var x, y C.gint` and convert on return.
 - [x] **`bayer.go` `At()` reads out of bounds at image edges.** The red/green/blue
   cases indexed `x+1`, `y+1`, `x-1`, `y-1` with no bounds checks, so the last
-  row/column panicked. Fixed: added a `sample()` accessor that clamps neighbor
-  coordinates to the image bounds (edge replication); also corrected the alpha
-  channel from `0` (fully transparent) to `0xff` and fixed the green sample in
-  the bottom-right case.
+  row/column panicked. Fixed: added a `sample()` accessor with a `reflectCoord`
+  helper that **mirrors** out-of-bounds neighbors back across the edge instead of
+  clamping — clamping would collapse onto the current Bayer site and yield the
+  wrong color phase on odd-sized images (raised in PR review). Also corrected the
+  alpha channel from `0` (fully transparent) to `0xff` and fixed the green sample
+  in the bottom-right case. Covered by `tests/bayer_test.go`.
 - [x] **`GetDataSlice` uses deprecated `reflect.SliceHeader`.** Replaced with
   `unsafe.Slice((*byte)(data), size)` (plus a nil/zero-size guard) and
   documented the C-memory-aliasing lifetime.
@@ -34,7 +36,9 @@ progress.
   `SetIntegerFeatureValue`, `SetFloatFeatureValue`, `SetNodeFeatureValue`
   (`device.go`) now pass `&gerror` and return `error`. The
   `arv_set_node_feature_value` C helper was updated to accept/propagate a
-  `GError**` and to guard against a NULL feature (which would otherwise crash).
+  `GError**` and to guard against a NULL feature (which would otherwise crash);
+  the NULL-feature case now sets `ARV_DEVICE_ERROR_FEATURE_NOT_FOUND` so the
+  error contract holds (raised in PR review).
 - [x] **`SetLineRate` discards its error.** Now returns the error from
   `SetFrameRate`.
 
@@ -72,7 +76,8 @@ progress.
   allocating copy) then copies again — slower and more allocating than a plain
   copy. Rewrite to copy directly from the C pointer into `dest` via
   `unsafe.Slice`, with no intermediate allocation.
-- [ ] **Remove unused `fastError`** in `internal.go` (dead code).
+- [x] **Remove unused `fastError`** in `internal.go` (dead code). Removed (also
+  dropped the now-unused `errors` import).
 - [ ] **`CleanupPerformanceCache` use-after-free hazard.** It frees cached C
   strings that may still be in use by in-flight `Fast` calls / cached elsewhere.
   Document the contract clearly or make it safe.
@@ -108,37 +113,40 @@ progress.
 
 ### P4 — Build, CI, and tooling
 
-- [ ] **Dockerfile is broken.** `go build -mod=vendor -o /src/listdevices
-  ./examples/list_devices.go` references a nonexistent path (it is
-  `examples/list_devices/main.go`) and `-mod=vendor` with no `vendor/` dir; base
-  image `golang:1.21` can't satisfy `go 1.23`. `make docker-build`/`docker-test`
-  cannot pass.
-- [ ] **CI Go version can't build the module.** `go.mod` needs 1.23 but CI jobs
-  run 1.21/1.22 → build failure. Align CI matrix with the chosen minimum.
-- [ ] **Deprecated/insecure GitHub Actions.** `securecodewarrior/github-action-gosec@master`
-  (unmaintained, pinned to a moving `master`; use `securego/gosec`),
-  `actions/upload-artifact@v3` and `actions/cache@v3` (EOL),
-  `setup-go@v4`, `codecov-action@v3`, `codeql-action@v2`. Pin to current major
-  versions.
-- [ ] **`.golangci.toml` is a copy-pasted template from another project.** It
-  references `viper.Bind`, `cobra.MinimumNArgs`, `cmd/.*`, `http.ResponseWriter`,
-  `*Gateway`, envconfig/release-please — none exist here. Replace with a config
-  that matches this library.
-- [ ] **Formatting is not actually enforced.** CI runs `make fmt` (treefmt with
-  `--allow-missing-formatter`) but `install-tools` never installs
-  prettier/gofumpt/gci, so the formatters silently skip and the diff check
-  passes vacuously.
-- [ ] **arm64 "multi-platform" job is a placeholder no-op** that just echoes a
-  message — remove it or implement real cross-compilation, don't imply support.
-- [ ] **`.gitignore` misses `coverage.out`/`coverage.html`** which the Makefile
-  generates.
+Context: investigating the red CI on PR #1 showed the failures were pre-existing
+environmental rot, not the P0 changes. `ubuntu-latest` moved to 24.04, where the
+Aravis dev package was **renamed** from `libaravis-0.8-dev` to `libaravis-dev`
+(still Aravis 0.8 — there is no stable 0.10). Two CI actions were also deleted or
+hard-deprecated. The library stays on Aravis 0.8 (current stable).
+
+- [x] **Dockerfile is broken.** Rewritten: `golang:1.23-bookworm` base, installs
+  `libaravis-dev` via apt, builds the correct package path
+  (`./examples/list_devices`), drops the bogus `-mod=vendor` and the
+  `arv-tool-0.8` invocation. (Base-image pull is proxy-blocked in the review
+  sandbox, so the final `docker build` runs in CI; the build command and package
+  availability were verified locally.)
+- [x] **CI Go version can't build the module.** All jobs now use Go 1.23 via a
+  single `GO_VERSION` env, matching `go.mod`.
+- [x] **Deprecated/insecure GitHub Actions.** Replaced the deleted
+  `securecodewarrior/github-action-gosec` with `securego/gosec`; bumped
+  `upload-artifact`→v4, `cache`→v4, `setup-go`→v5, `checkout`→v5,
+  `codecov-action`→v5, `codeql-action`→v3.
+- [x] **`.golangci.toml` was a copy-pasted template.** Replaced with a curated
+  config for this library (standard linters + a few high-value ones, examples/
+  and tests excluded from `errcheck`). Verified clean with `golangci-lint` 2.5.0.
+- [x] **Formatting is not actually enforced.** The CI format check now runs
+  `gofmt -l .` directly and fails on any unformatted file.
+- [x] **arm64 "multi-platform" job is a placeholder no-op.** Removed; kept a real
+  linux/amd64 build job, with a comment on what a real arm64 cross-build needs.
+- [x] **`.gitignore` misses `coverage.out`/`coverage.html`.** Added.
 
 ### P5 — Tests (make the suite mean something)
 
-- [ ] **Add real unit tests for pure-Go logic** (no hardware needed):
-  `bayer.go` `At()` (incl. the edge-panic regression), `internal.go`
-  `errorFromGError` mapping and `toBool`, `GetDataInto` clamp, and
-  `getCachedCString` caching correctness. Today these files have ~0% coverage.
+- [~] **Add real unit tests for pure-Go logic** (no hardware needed): **Done for
+  `bayer.go`** — new `tests/bayer_test.go` covers the edge-panic regression, the
+  opaque-alpha fix, and the CFA edge-phase reflection. Still TODO:
+  `internal.go` `errorFromGError` mapping and `toBool`, `GetDataInto` clamp, and
+  `getCachedCString` caching correctness.
 - [ ] **Replace log-only "tests" with real assertions or delete them.** Many
   tests (`TestErrorHandling`, `TestConstants`, `TestCameraCreationWithoutDevice`,
   etc.) only `t.Logf` and cannot fail, inflating a false sense of coverage.

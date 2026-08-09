@@ -61,7 +61,7 @@ func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
 		return nil, 0, err
 	}
 
-	return unsafe.Pointer(data), size, nil
+	return data, size, nil
 }
 
 // GetDataSlice returns a Go slice that directly references the C buffer memory

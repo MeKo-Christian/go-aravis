@@ -26,22 +26,17 @@ func (p *BayerRG) ColorModel() color.Model { return color.RGBAModel }
 
 func (p *BayerRG) Bounds() image.Rectangle { return p.Rect }
 
-// sample returns the raw sensor value at (x, y), clamping the coordinates to the
-// image bounds (edge replication). Clamping keeps the neighbor lookups used by
-// At from indexing outside Pix on the first/last row and column, which would
-// otherwise panic.
+// sample returns the raw sensor value at (x, y). Coordinates outside the image
+// are reflected back across the nearest edge (mirror), not clamped. Clamping
+// would collapse an out-of-bounds neighbor onto the current Bayer site, which
+// carries the wrong color phase — e.g. on the last column of an odd-width image
+// it would feed a red sample where a green one is needed. Reflection lands on a
+// site of the same CFA parity as the requested neighbor, so the color phase is
+// preserved, and it also keeps the lookups from indexing outside Pix (which
+// would otherwise panic).
 func (p *BayerRG) sample(x, y int) uint8 {
-	if x < p.Rect.Min.X {
-		x = p.Rect.Min.X
-	} else if x >= p.Rect.Max.X {
-		x = p.Rect.Max.X - 1
-	}
-
-	if y < p.Rect.Min.Y {
-		y = p.Rect.Min.Y
-	} else if y >= p.Rect.Max.Y {
-		y = p.Rect.Max.Y - 1
-	}
+	x = reflectCoord(x, p.Rect.Min.X, p.Rect.Max.X)
+	y = reflectCoord(y, p.Rect.Min.Y, p.Rect.Max.Y)
 
 	i := (y-p.Rect.Min.Y)*p.Stride + (x - p.Rect.Min.X)
 	if i < 0 || i >= len(p.Pix) {
@@ -49,6 +44,26 @@ func (p *BayerRG) sample(x, y int) uint8 {
 	}
 
 	return p.Pix[i]
+}
+
+// reflectCoord maps v into the half-open range [lo, hi) by mirroring across the
+// edges. Because each reflection reverses a unit step, the parity of the result
+// relative to the edge is preserved, which keeps a Bayer neighbor on its color
+// phase. A degenerate span (<= 1) has no valid mirror, so it returns lo.
+func reflectCoord(v, lo, hi int) int {
+	if hi-lo <= 1 {
+		return lo
+	}
+
+	for v < lo || v >= hi {
+		if v < lo {
+			v = 2*lo - v
+		} else {
+			v = 2*(hi-1) - v
+		}
+	}
+
+	return v
 }
 
 // At returns an RGBA pixel with simple nearest-neighbor debayering.

@@ -194,7 +194,7 @@ func TestBufferWithRealCamera(t *testing.T) {
 	}
 
 	// Create buffer with proper size
-	buffer, err := aravis.NewBuffer(uint(payloadSize))
+	buffer, err := aravis.NewBuffer(payloadSize)
 	if err != nil {
 		t.Fatalf("Failed to create buffer: %v", err)
 	}
@@ -259,7 +259,7 @@ func testBufferDataMethodsWithRealData(t *testing.T, buffer aravis.Buffer) {
 		t.Logf("GetDataSlice() returned %d bytes of real data", len(dataSlice))
 
 		// Compare first few bytes if both methods work
-		if data != nil && len(data) > 0 && len(dataSlice) > 0 {
+		if len(data) > 0 && len(dataSlice) > 0 {
 			if data[0] == dataSlice[0] {
 				t.Log("GetData() and GetDataSlice() return consistent data")
 			} else {

@@ -192,7 +192,7 @@ func BenchmarkBufferDataAccessComparison(b *testing.B) {
 		return
 	}
 
-	buffer, err := aravis.NewBuffer(uint(payloadSize))
+	buffer, err := aravis.NewBuffer(payloadSize)
 	if err != nil {
 		b.Skip("Failed to create buffer")
 		return
@@ -255,7 +255,7 @@ func BenchmarkCombinedOperations(b *testing.B) {
 		return
 	}
 
-	buffer, err := aravis.NewBuffer(uint(payloadSize))
+	buffer, err := aravis.NewBuffer(payloadSize)
 	if err != nil {
 		b.Skip("Failed to create buffer")
 		return
@@ -324,7 +324,7 @@ func BenchmarkMemoryAllocations(b *testing.B) {
 		return
 	}
 
-	buffer, err := aravis.NewBuffer(uint(payloadSize))
+	buffer, err := aravis.NewBuffer(payloadSize)
 	if err != nil {
 		b.Skip("Failed to create buffer")
 		return
