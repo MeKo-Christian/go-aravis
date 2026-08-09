@@ -1,29 +1,24 @@
-FROM golang:1.21-bullseye AS build
+FROM golang:1.23-bookworm
+
 WORKDIR /src
 
-# build essential, Gig-EV dependencies from manual, plus some util packages (vim, less)
-RUN apt-get update && apt-get install -y \
-    build-essential sudo \
-    vim-tiny less nano git ninja-build python3-pip cmake libglib2.0-dev \
-    libxml2-dev libusb-1.0-0-dev 
+# Aravis 0.8 development headers/libraries plus the CGO build toolchain.
+# Debian bookworm ships aravis 0.8.x as the `libaravis-dev` package, which
+# provides the aravis-0.8 pkg-config module this binding links against. The
+# extra -dev packages satisfy the modules aravis-0.8.pc requires (libusb-1.0,
+# libxml-2.0, zlib, glib); without them `pkg-config --cflags aravis-0.8` fails.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        libaravis-dev \
+        libglib2.0-dev \
+        libxml2-dev \
+        zlib1g-dev \
+        libusb-1.0-0-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install meson
+COPY . /src
 
-RUN git clone https://github.com/AravisProject/aravis.git /opt/aravis && \
-    cd /opt/aravis && \
-    git checkout main && \
-    ls -a && \
-    meson setup -Dviewer=disabled -Dintrospection=disabled -Dgst-plugin=disabled -Ddocumentation=disabled build && \
-    cd build && \
-    ninja && \
-    ninja install && \
-    ldconfig
+RUN CGO_ENABLED=1 go build -o /usr/local/bin/listdevices ./examples/list_devices
 
-RUN arv-tool-0.8
-
-COPY . /src/github.com/hybridgroup/go-aravis
-WORKDIR /src/github.com/hybridgroup/go-aravis
-
-RUN go build -mod=vendor -o /src/listdevices ./examples/list_devices.go
-
-ENTRYPOINT ["/src/listdevices"]
+CMD ["listdevices"]

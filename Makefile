@@ -8,7 +8,7 @@ SHELL := /bin/bash
 # Project information
 PROJECT_NAME := go-aravis
 MODULE_NAME := github.com/hybridgroup/go-aravis
-GO_VERSION := 1.21
+GO_VERSION := 1.23
 
 # Directories
 BIN_DIR := bin

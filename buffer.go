@@ -5,7 +5,6 @@ package aravis
 import "C"
 
 import (
-	"reflect"
 	"unsafe"
 )
 
@@ -62,7 +61,7 @@ func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
 		return nil, 0, err
 	}
 
-	return unsafe.Pointer(data), size, nil
+	return data, size, nil
 }
 
 // GetDataSlice returns a Go slice that directly references the C buffer memory
@@ -79,14 +78,13 @@ func (b *Buffer) GetDataSlice() ([]byte, error) {
 		return nil, err
 	}
 
-	// Create Go slice header that references C memory directly
-	var slice []byte
-	sliceHeader := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
-	sliceHeader.Data = uintptr(unsafe.Pointer(data))
-	sliceHeader.Len = size
-	sliceHeader.Cap = size
+	if data == nil || size <= 0 {
+		return nil, nil
+	}
 
-	return slice, nil
+	// unsafe.Slice aliases the C buffer memory directly (zero-copy). The
+	// returned slice is only valid until the buffer is freed or reused.
+	return unsafe.Slice((*byte)(data), size), nil
 }
 
 // GetDataInto copies buffer data into the provided slice

@@ -26,39 +26,79 @@ func (p *BayerRG) ColorModel() color.Model { return color.RGBAModel }
 
 func (p *BayerRG) Bounds() image.Rectangle { return p.Rect }
 
+// sample returns the raw sensor value at (x, y). Coordinates outside the image
+// are reflected back across the nearest edge (mirror), not clamped. Clamping
+// would collapse an out-of-bounds neighbor onto the current Bayer site, which
+// carries the wrong color phase — e.g. on the last column of an odd-width image
+// it would feed a red sample where a green one is needed. Reflection lands on a
+// site of the same CFA parity as the requested neighbor, so the color phase is
+// preserved, and it also keeps the lookups from indexing outside Pix (which
+// would otherwise panic).
+func (p *BayerRG) sample(x, y int) uint8 {
+	x = reflectCoord(x, p.Rect.Min.X, p.Rect.Max.X)
+	y = reflectCoord(y, p.Rect.Min.Y, p.Rect.Max.Y)
+
+	i := (y-p.Rect.Min.Y)*p.Stride + (x - p.Rect.Min.X)
+	if i < 0 || i >= len(p.Pix) {
+		return 0
+	}
+
+	return p.Pix[i]
+}
+
+// reflectCoord maps v into the half-open range [lo, hi) by mirroring across the
+// edges. Because each reflection reverses a unit step, the parity of the result
+// relative to the edge is preserved, which keeps a Bayer neighbor on its color
+// phase. A degenerate span (<= 1) has no valid mirror, so it returns lo.
+func reflectCoord(v, lo, hi int) int {
+	if hi-lo <= 1 {
+		return lo
+	}
+
+	for v < lo || v >= hi {
+		if v < lo {
+			v = 2*lo - v
+		} else {
+			v = 2*(hi-1) - v
+		}
+	}
+
+	return v
+}
+
 // At returns an RGBA pixel with simple nearest-neighbor debayering.
 func (p *BayerRG) At(x, y int) color.Color {
 	if x&1 == 0 && y&1 == 0 {
 		// top-left: red
 		return color.RGBA{
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x+1-p.Rect.Min.X)],
-			p.Pix[(y+1-p.Rect.Min.Y)*p.Stride+(x+1-p.Rect.Min.X)],
-			0,
+			p.sample(x, y),
+			p.sample(x+1, y),
+			p.sample(x+1, y+1),
+			0xff,
 		}
 	} else if x&1 == 1 && y&1 == 0 {
 		// top-right: green
 		return color.RGBA{
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x-1-p.Rect.Min.X)],
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			p.Pix[(y+1-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			0,
+			p.sample(x-1, y),
+			p.sample(x, y),
+			p.sample(x, y+1),
+			0xff,
 		}
 	} else if x&1 == 0 && y&1 == 1 {
 		// bottom-left: green
 		return color.RGBA{
-			p.Pix[(y-1-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x+1-p.Rect.Min.X)],
-			0,
+			p.sample(x, y-1),
+			p.sample(x, y),
+			p.sample(x+1, y),
+			0xff,
 		}
 	} else {
 		// bottom-right: blue
 		return color.RGBA{
-			p.Pix[(y-1-p.Rect.Min.Y)*p.Stride+(x-1-p.Rect.Min.X)],
-			p.Pix[(y-1-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			p.Pix[(y-p.Rect.Min.Y)*p.Stride+(x-p.Rect.Min.X)],
-			0,
+			p.sample(x-1, y-1),
+			p.sample(x, y-1),
+			p.sample(x, y),
+			0xff,
 		}
 	}
 }

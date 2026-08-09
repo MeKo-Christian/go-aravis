@@ -166,7 +166,7 @@ func testStreamSetup(t *testing.T, camera aravis.Camera) (aravis.Stream, []aravi
 	buffers := make([]aravis.Buffer, numBuffers)
 
 	for i := range numBuffers {
-		buffer, err := aravis.NewBuffer(uint(payloadSize))
+		buffer, err := aravis.NewBuffer(payloadSize)
 		if err != nil {
 			t.Errorf("  Failed to create buffer %d: %v", i, err)
 			stream.Close()
@@ -318,7 +318,7 @@ func TestStreamingPerformance(t *testing.T) {
 
 	numBuffers := 10 // More buffers for high-speed streaming
 	for range numBuffers {
-		buffer, err := aravis.NewBuffer(uint(payloadSize))
+		buffer, err := aravis.NewBuffer(payloadSize)
 		if err != nil {
 			t.Fatalf("Failed to create buffer: %v", err)
 		}

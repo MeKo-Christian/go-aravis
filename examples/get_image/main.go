@@ -33,6 +33,7 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		stream, err := camera.CreateStream()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		defer stream.Close()
 
@@ -40,22 +41,32 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		buffer, err := aravis.NewBuffer(size)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		stream.PushBuffer(buffer)
 
 		// Start acquisition
-		camera.StartAcquisition()
+		if err := camera.StartAcquisition(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		defer camera.StopAcquisition()
 
 		buffer, err = stream.TimeoutPopBuffer(time.Second)
-		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
+			http.Error(w, fmt.Sprintf("buffer not ready: status %d", s), http.StatusInternalServerError)
+			return
 		}
 
 		data, err := buffer.GetData()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		// Image is in red-green bayer format

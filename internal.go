@@ -5,7 +5,6 @@ package aravis
 import "C"
 
 import (
-	"errors"
 	"sync"
 )
 
@@ -70,11 +69,6 @@ func errorFromGError(gerr *C.GError) error {
 	return pooledErr
 }
 
-// Fast error creation for performance-critical paths
-func fastError(message string) error {
-	return errors.New(message) // For simple cases, stick with stdlib
-}
-
 func goString(cstr *C.gchar) string {
-	return C.GoString((*C.char)(cstr))
+	return C.GoString(cstr)
 }
