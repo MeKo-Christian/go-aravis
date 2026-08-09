@@ -12,31 +12,31 @@ progress.
 
 ### P0 — Correctness bugs (code can crash, corrupt, or silently misbehave)
 
-- [ ] **32-bit/64-bit pointer mismatch in out-params.** In `camera.go`,
+- [x] **32-bit/64-bit pointer mismatch in out-params.** In `camera.go`,
   `GetSensorSize`, `GetRegion`, `GetHeightBounds`, `GetWidthBounds`, and
-  `GetBinning` declare Go `int` locals (64-bit) and pass
-  `(*C.gint)(unsafe.Pointer(&x))` to Aravis, which writes only 4 bytes. It works
-  by luck on little-endian with zero-initialized locals and is wrong on
-  big-endian. Fix: declare `var x, y C.gint` and convert on return.
-- [ ] **`bayer.go` `At()` reads out of bounds at image edges.** The red/green/blue
-  cases index `x+1`, `y+1`, `x-1`, `y-1` with no bounds checks, so the last
-  row/column panics. `examples/get_image` feeds a full frame to `jpeg.Encode`,
-  which visits every pixel — the "production-ready" example panics on real data.
-  Fix: clamp neighbor coordinates to the image bounds.
-- [ ] **`GetDataSlice` uses deprecated `reflect.SliceHeader`.** Deprecated since
-  Go 1.20 (go.mod targets 1.23) and flagged by `go vet`. Replace with
-  `unsafe.Slice(( *byte)(data), size)`. Document the C-memory-aliasing lifetime
-  and consider a `runtime.KeepAlive(b)` contract.
-- [ ] **`get_image` example error handling.** `http.Error(...)` calls are not
-  followed by `return`, so execution continues with invalid stream/buffer; and
-  on a bad buffer status with `err == nil`, `err.Error()` is a nil-pointer
-  panic. Fix the control flow and status/err checks.
-- [ ] **Device setters silently swallow errors.** `SetStringFeatureValue`,
+  `GetBinning` declared Go `int` locals (64-bit) and passed
+  `(*C.gint)(unsafe.Pointer(&x))` to Aravis, which writes only 4 bytes. Fixed:
+  declare `var x, y C.gint` and convert on return.
+- [x] **`bayer.go` `At()` reads out of bounds at image edges.** The red/green/blue
+  cases indexed `x+1`, `y+1`, `x-1`, `y-1` with no bounds checks, so the last
+  row/column panicked. Fixed: added a `sample()` accessor that clamps neighbor
+  coordinates to the image bounds (edge replication); also corrected the alpha
+  channel from `0` (fully transparent) to `0xff` and fixed the green sample in
+  the bottom-right case.
+- [x] **`GetDataSlice` uses deprecated `reflect.SliceHeader`.** Replaced with
+  `unsafe.Slice((*byte)(data), size)` (plus a nil/zero-size guard) and
+  documented the C-memory-aliasing lifetime.
+- [x] **`get_image` example error handling.** `http.Error(...)` calls now
+  `return`; added an explicit error check after `TimeoutPopBuffer`; and the
+  bad-buffer-status branch now reports the status instead of dereferencing a
+  possibly-nil `err`.
+- [x] **Device setters silently swallow errors.** `SetStringFeatureValue`,
   `SetIntegerFeatureValue`, `SetFloatFeatureValue`, `SetNodeFeatureValue`
-  (`device.go`) pass `nil` for `GError` and return nothing. Give them an
-  `error` return like the rest of the API.
-- [ ] **`SetLineRate` discards its error.** It calls `SetFrameRate` and drops the
-  returned error. Return it.
+  (`device.go`) now pass `&gerror` and return `error`. The
+  `arv_set_node_feature_value` C helper was updated to accept/propagate a
+  `GError**` and to guard against a NULL feature (which would otherwise crash).
+- [x] **`SetLineRate` discards its error.** Now returns the error from
+  `SetFrameRate`.
 
 ### P1 — API honesty (public surface that lies about what it does)
 

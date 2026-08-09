@@ -193,11 +193,11 @@ func (c *Camera) GetSensorSize() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var width, height int
+	var width, height C.gint
 	C.arv_camera_get_sensor_size(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&width)),
-		(*C.gint)(unsafe.Pointer(&height)),
+		&width,
+		&height,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -229,13 +229,13 @@ func (c *Camera) GetRegion() (int, int, int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var x, y, width, height int
+	var x, y, width, height C.gint
 	C.arv_camera_get_region(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&x)),
-		(*C.gint)(unsafe.Pointer(&y)),
-		(*C.gint)(unsafe.Pointer(&width)),
-		(*C.gint)(unsafe.Pointer(&height)),
+		&x,
+		&y,
+		&width,
+		&height,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -267,11 +267,11 @@ func (c *Camera) GetHeightBounds() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var min, max int
+	var min, max C.gint
 	C.arv_camera_get_height_bounds(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&min)),
-		(*C.gint)(unsafe.Pointer(&max)),
+		&min,
+		&max,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -303,11 +303,11 @@ func (c *Camera) GetWidthBounds() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var minVal, maxVal int
+	var minVal, maxVal C.gint
 	C.arv_camera_get_width_bounds(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&minVal)),
-		(*C.gint)(unsafe.Pointer(&maxVal)),
+		&minVal,
+		&maxVal,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -325,11 +325,11 @@ func (c *Camera) GetBinning() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var minBin, maxBin int
+	var minBin, maxBin C.gint
 	C.arv_camera_get_binning(
 		c.camera,
-		(*C.gint)(unsafe.Pointer(&minBin)),
-		(*C.gint)(unsafe.Pointer(&maxBin)),
+		&minBin,
+		&maxBin,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -456,8 +456,8 @@ func (c *Camera) GetFrameRateBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
-func (c *Camera) SetLineRate(lineRate float64) {
-	c.SetFrameRate(lineRate)
+func (c *Camera) SetLineRate(lineRate float64) error {
+	return c.SetFrameRate(lineRate)
 }
 
 func (c *Camera) GetLineRate() (float64, error) {
