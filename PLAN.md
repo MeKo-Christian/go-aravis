@@ -44,25 +44,43 @@ progress.
 
 ### P1 — API honesty (public surface that lies about what it does)
 
-- [ ] **Remove or implement the 17 empty `// TODO` stub methods.** These are
-      exported and silently no-op: `camera.go` — `SetBinning`, `SetPixelFormat`,
-      `GetPixelFormat`, `GetPixelFormatAsString`, `SetPixelFormatFromString`,
-      `GetAvailablePixelFormats`, `GetAvailablePixelFormatsAsDisplayNames`,
+- [x] **Remove or implement the 17 empty `// TODO` stub methods.** All 11
+      `camera.go` stubs are now implemented against the real Aravis API:
+      `SetBinning`, `SetPixelFormat`, `GetPixelFormat`, `GetPixelFormatAsString`,
+      `SetPixelFormatFromString`, `GetAvailablePixelFormats`,
+      `GetAvailablePixelFormatsAsDisplayNames`,
       `GetAvailablePixelFormatsAsStrings`, `GetExposureTimeBounds`,
-      `GetExposureTimeAuto`, `SetGainAuto`; `interface.go` — `OpenDevice`,
-      `InterfaceGetDeviceId`, `InterfaceGetDevicePhysicalId`,
-      `InterfaceGetDeviceAddress`, `InterfaceGetNumDevices`, `InterfaceOpenDevice`.
-      Decision: implement the high-value ones (pixel format, binning, exposure
-      bounds) and delete the rest until implemented.
-- [ ] **`SetControlLostHandler` uses a single package-global handler.** All
-      cameras share one `controlLostHandler`, and it is read from a C callback
-      goroutine with no synchronization (data race). Make it per-camera and
-      synchronized, or document the single-camera limitation explicitly.
-- [ ] **Fix typo `GetNumInferface` → `GetNumInterface`** in `interface.go`
-      (keep a deprecated alias if compatibility matters).
-- [ ] **`Close()` methods are unguarded.** `Camera.Close`/`Stream.Close` call
-      `g_object_unref` with no nil check and no double-close protection; add guards
-      and consider `runtime.SetFinalizer` for leak safety.
+      `GetExposureTimeAuto`, `SetGainAuto`. The three
+      `arv_camera_dup_available_pixel_formats*` wrappers `g_free` the array they
+      are handed (the `dup` prefix transfers ownership) while leaving the strings
+      it points at to Aravis. `GetBinning` kept its signature but its locals were
+      renamed `dx, dy` — it returns the current binning, not bounds, and the old
+      `minBin, maxBin` names said otherwise. In `interface.go`, `OpenDevice`
+      became `OpenDevice(id string) (Device, error)`; the five `Interface*` stubs
+      were deleted, since they all need an `ArvInterface *` handle and this
+      wrapper has no `Interface` type to hang one on.
+- [x] **`SetControlLostHandler` uses a single package-global handler.** Handlers
+      now live in a mutex-guarded `controlLost` registry keyed per camera, and
+      the key travels through GLib as the signal's `user_data`, so each camera's
+      callback finds its own. Two further bugs fell out of this: the signal was
+      only connected inside `CreateStream` (so a handler set on a camera that
+      never streamed could never fire) and it was reconnected on *every*
+      `CreateStream` call, stacking duplicate handlers. Connecting now happens in
+      `SetControlLostHandler` itself, exactly once, and `Close` disconnects.
+      Passing nil removes the handler; calling it on a closed camera reports an
+      error instead of silently succeeding. Covered by a `-race` concurrency test.
+- [x] **Fix typo `GetNumInferface` → `GetNumInterface`** in `interface.go`.
+      `GetNumInferface` remains as a `// Deprecated:` wrapper that forwards, so
+      existing callers keep compiling; in-repo callers were moved over.
+- [x] **`Close()` methods are unguarded.** `Camera.Close` and `Stream.Close` now
+      return early on a nil pointer and nil the pointer after unreffing, so a
+      zero value or a second `Close` is a no-op. No `runtime.SetFinalizer`:
+      `Camera`, `Stream` and `Device` are value types, and a finalizer on a value
+      that callers routinely copy would unref while a copy is still live.
+      Implementing `OpenDevice` also forced the ownership question for `Device`,
+      which had no `Close` at all — `OpenDevice` hands over a reference the caller
+      owns, while `Camera.GetDevice` only borrows the camera's. `Device` gained an
+      `owned` flag and a `Close` that unrefs only in the first case.
 
 ### P2 — Remove false performance machinery / claims
 
@@ -173,9 +191,13 @@ hard-deprecated. The library stays on Aravis 0.8 (current stable).
       etc.) only `t.Logf` and cannot fail, inflating a false sense of coverage.
 - [ ] **Introduce a seam over the C calls** so a genuine fake can be injected
       (`mock_test.go` currently contains no mock and calls the real C layer).
-- [ ] **Add `-race` tests** that hammer `getCachedCString` and
+- [~] **Add `-race` tests** that hammer `getCachedCString` and
       `SetControlLostHandler` concurrently (both have real race exposure).
-      `CleanupPerformanceCache` no longer exists (see P2).
+      **Done for `SetControlLostHandler`** — `tests/lifecycle_test.go` drives
+      concurrent installs and removals across several cameras under `-race`.
+      `getCachedCString` no longer has a race to test: the cache became
+      write-once under P2, so its mutex is gone. `CleanupPerformanceCache` no
+      longer exists either (see P2).
 - [ ] **Fix `TimeoutPopBuffer(1000)` unit bug** in `buffer_test.go` — the literal
       is 1000 ns (1 µs), not the "1 second" the comment claims.
 - [ ] **Stop advertising unrunnable benchmarks** as measured results, or make
