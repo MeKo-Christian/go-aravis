@@ -5,17 +5,32 @@ package aravis
 // #include <stdlib.h>
 // #include <stdio.h>
 /*
-extern void go_control_lost_handler();
+extern void go_control_lost_handler(guintptr key);
 
-static void control_lost_cb (ArvGvDevice *gv_device)
+// The handler key is carried through GLib as the signal's user_data, so each
+// camera's callback finds its own Go handler instead of a package global.
+static void control_lost_cb (ArvDevice *device, gpointer user_data)
 {
-	go_control_lost_handler();
+	go_control_lost_handler((guintptr) user_data);
 }
 
-static void init_control_lost_cb(ArvCamera *camera)
+static gulong connect_control_lost_cb(ArvCamera *camera, guintptr key)
 {
-	g_signal_connect(arv_camera_get_device(camera), "control-lost",
-		G_CALLBACK (control_lost_cb), NULL);
+	ArvDevice *device = arv_camera_get_device(camera);
+	if (device == NULL)
+		return 0;
+
+	return g_signal_connect(device, "control-lost",
+		G_CALLBACK (control_lost_cb), (gpointer) key);
+}
+
+static void disconnect_control_lost_cb(ArvCamera *camera, gulong handler_id)
+{
+	ArvDevice *device = arv_camera_get_device(camera);
+	if (device == NULL || handler_id == 0)
+		return;
+
+	g_signal_handler_disconnect(device, handler_id);
 }
 
 static void stream_cb_rt(void *user_data, ArvStreamCallbackType type, ArvBuffer *buffer)
@@ -45,6 +60,8 @@ static ArvStream* arv_camera_create_hp_stream(ArvCamera *camera, void *user_data
 import "C"
 
 import (
+	"errors"
+	"sync"
 	"unsafe"
 )
 
@@ -56,9 +73,29 @@ const (
 	ThreadPriorityHigh
 )
 
+// cameraState is the lifecycle state that belongs to the underlying camera
+// rather than to one Go value wrapping it. Camera is handed out by value and
+// copied freely, so a copy must see the same registration and the same closed
+// flag — otherwise two copies could each install a control-lost handler, or
+// each unref the camera.
+type cameraState struct {
+	closed closeFlag
+
+	mu sync.Mutex
+	// controlLostKey identifies this camera's entry in controlLost.handlers,
+	// and doubles as the user_data the GLib signal carries back. Zero means no
+	// handler has been installed yet.
+	controlLostKey uintptr
+	// controlLostID is the GLib signal handler id, needed to disconnect.
+	controlLostID C.gulong
+}
+
 type Camera struct {
 	camera         *C.struct__ArvCamera
 	ThreadPriority ThreadPriorityType
+
+	// state is shared by every copy of this Camera. Nil for the zero value.
+	state *cameraState
 }
 
 const (
@@ -77,12 +114,22 @@ func NewCamera(name string) (Camera, error) {
 	var gerror *C.GError
 	var err error
 
-	cs := C.CString(name)
-	defer C.free(unsafe.Pointer(cs))
+	// Aravis takes NULL, not the empty string, as the sentinel for "the first
+	// available camera". C.CString("") would produce a non-NULL pointer to an
+	// empty name, which no camera matches.
+	var cs *C.char
+	if name != "" {
+		cs = C.CString(name)
+		defer C.free(unsafe.Pointer(cs))
+	}
 
 	cam.camera = C.arv_camera_new(cs, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
+	}
+
+	if cam.camera != nil {
+		cam.state = &cameraState{}
 	}
 
 	return cam, err
@@ -125,7 +172,7 @@ func (c *Camera) CreateStream() (Stream, error) {
 		return Stream{}, err
 	}
 
-	C.init_control_lost_cb(c.camera)
+	stream.closed = newCloseFlag()
 
 	return stream, err
 }
@@ -317,54 +364,172 @@ func (c *Camera) GetWidthBounds() (int, int, error) {
 	return int(minVal), int(maxVal), err
 }
 
-func (c *Camera) SetBinning() {
-	// TODO
+func (c *Camera) SetBinning(dx, dy int) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_binning(c.camera, C.gint(dx), C.gint(dy), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
+// GetBinning returns the current horizontal and vertical binning factors.
 func (c *Camera) GetBinning() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var minBin, maxBin C.gint
+	var dx, dy C.gint
 	C.arv_camera_get_binning(
 		c.camera,
-		&minBin,
-		&maxBin,
+		&dx,
+		&dy,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return int(minBin), int(maxBin), err
+	return int(dx), int(dy), err
 }
 
-func (c *Camera) SetPixelFormat() {
-	// TODO
+func (c *Camera) SetPixelFormat(format uint32) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_pixel_format(c.camera, C.ArvPixelFormat(format), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
-func (c *Camera) GetPixelFormat() {
-	// TODO
+func (c *Camera) GetPixelFormat() (uint32, error) {
+	var gerror *C.GError
+	var err error
+
+	format := C.arv_camera_get_pixel_format(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return uint32(format), err
 }
 
-func (c *Camera) GetPixelFormatAsString() {
-	// TODO
+func (c *Camera) GetPixelFormatAsString() (string, error) {
+	var gerror *C.GError
+	var err error
+
+	// The returned string is owned by Aravis and must not be freed.
+	format := C.arv_camera_get_pixel_format_as_string(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+		return "", err
+	}
+
+	return C.GoString(format), err
 }
 
-func (c *Camera) SetPixelFormatFromString() {
-	// TODO
+func (c *Camera) SetPixelFormatFromString(format string) error {
+	var gerror *C.GError
+	var err error
+
+	cs := C.CString(format)
+	defer C.free(unsafe.Pointer(cs))
+
+	C.arv_camera_set_pixel_format_from_string(c.camera, cs, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
-func (c *Camera) GetAvailablePixelFormats() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormats() ([]uint32, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// The returned array is owned by the caller and has to be freed.
+	formats := C.arv_camera_dup_available_pixel_formats(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if formats == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(formats))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]uint32, 0, int(n))
+	for _, format := range unsafe.Slice(formats, int(n)) {
+		result = append(result, uint32(format))
+	}
+
+	return result, err
 }
 
-func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() ([]string, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// Only the array itself is owned by the caller, not the strings it holds.
+	names := C.arv_camera_dup_available_pixel_formats_as_display_names(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if names == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(names))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]string, 0, int(n))
+	for _, name := range unsafe.Slice(names, int(n)) {
+		result = append(result, C.GoString(name))
+	}
+
+	return result, err
 }
 
-func (c *Camera) GetAvailablePixelFormatsAsStrings() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormatsAsStrings() ([]string, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// Only the array itself is owned by the caller, not the strings it holds.
+	formats := C.arv_camera_dup_available_pixel_formats_as_strings(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if formats == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(formats))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]string, 0, int(n))
+	for _, format := range unsafe.Slice(formats, int(n)) {
+		result = append(result, C.GoString(format))
+	}
+
+	return result, err
 }
 
 func (c *Camera) StartAcquisition() error {
@@ -579,8 +744,22 @@ func (c *Camera) GetExposureTime() (float64, error) {
 	return float64(cdouble), err
 }
 
-func (c *Camera) GetExposureTimeBounds() {
-	// TODO
+func (c *Camera) GetExposureTimeBounds() (float64, float64, error) {
+	var gerror *C.GError
+	var err error
+
+	var minVal, maxVal C.double
+	C.arv_camera_get_exposure_time_bounds(
+		c.camera,
+		&minVal,
+		&maxVal,
+		&gerror,
+	)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return float64(minVal), float64(maxVal), err
 }
 
 func (c *Camera) SetExposureTimeAuto(mode int) error {
@@ -595,8 +774,16 @@ func (c *Camera) SetExposureTimeAuto(mode int) error {
 	return err
 }
 
-func (c *Camera) GetExposureTimeAuto() {
-	// TODO
+func (c *Camera) GetExposureTimeAuto() (int, error) {
+	var gerror *C.GError
+	var err error
+
+	mode := C.arv_camera_get_exposure_time_auto(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return int(mode), err
 }
 
 func (c *Camera) SetGain(gain float64) error {
@@ -640,8 +827,16 @@ func (c *Camera) GetGainBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
-func (c *Camera) SetGainAuto() {
-	// TODO
+func (c *Camera) SetGainAuto(mode int) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_gain_auto(c.camera, C.ArvAuto(mode), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
 func (c *Camera) GetPayloadSize() (uint, error) {
@@ -757,15 +952,113 @@ func (c *Camera) GetChunkMode() (bool, error) {
 	return toBool(mode), err
 }
 
+// Close releases the camera. It is safe to call more than once, and safe to
+// call on any copy of the same Camera: the camera is unreffed exactly once.
+// Any control-lost handler installed on it is disconnected first. Neither this
+// Camera nor any copy of it may be used afterwards.
 func (c *Camera) Close() {
+	if c.camera == nil || c.state == nil || !c.state.closed.claim() {
+		return
+	}
+
+	c.clearControlLostHandler()
+
 	C.g_object_unref(C.gpointer(c.camera))
 }
 
-var controlLostHandler func()
+// IsClosed reports whether the camera has been released, by this value or by
+// any copy of it.
+func (c *Camera) IsClosed() bool {
+	return c.camera == nil || c.state == nil || c.state.closed.isClosed()
+}
 
+// controlLost maps handler keys to the Go callbacks they belong to. The C
+// callback runs on an Aravis thread, so every access has to be synchronized;
+// the previous package-global handler variable was both shared between all
+// cameras and read from that thread without any locking.
+var controlLost = struct {
+	sync.Mutex
+	handlers map[uintptr]func()
+	nextKey  uintptr
+}{
+	handlers: make(map[uintptr]func()),
+}
+
+// SetControlLostHandler installs hdl as this camera's control-lost callback,
+// replacing any handler set before. Passing nil removes the handler.
+//
+// hdl is invoked from an Aravis thread, not from the goroutine that called
+// this method, so it must be safe to run concurrently with the rest of the
+// program. Handlers are per-camera and shared by every copy of a Camera:
+// installing one on a camera has no effect on any other camera, and a copy
+// replaces the handler rather than adding a second one.
 func (c *Camera) SetControlLostHandler(hdl func()) error {
-	controlLostHandler = hdl
+	if c.camera == nil || c.state == nil || c.state.closed.isClosed() {
+		return errors.New("aravis: camera is closed")
+	}
+
+	if hdl == nil {
+		c.clearControlLostHandler()
+		return nil
+	}
+
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	if c.state.controlLostKey != 0 {
+		// Already connected to the signal — just swap the callback.
+		controlLost.Lock()
+		controlLost.handlers[c.state.controlLostKey] = hdl
+		controlLost.Unlock()
+
+		return nil
+	}
+
+	controlLost.Lock()
+	controlLost.nextKey++
+	key := controlLost.nextKey
+	controlLost.handlers[key] = hdl
+	controlLost.Unlock()
+
+	// Register the callback only after the handler is reachable, so a signal
+	// arriving immediately finds it.
+	handlerID := C.connect_control_lost_cb(c.camera, C.guintptr(key))
+	if handlerID == 0 {
+		controlLost.Lock()
+		delete(controlLost.handlers, key)
+		controlLost.Unlock()
+
+		return errors.New("aravis: could not connect the control-lost signal")
+	}
+
+	c.state.controlLostKey = key
+	c.state.controlLostID = handlerID
+
 	return nil
+}
+
+// clearControlLostHandler disconnects the signal and drops the callback, if
+// one was installed.
+func (c *Camera) clearControlLostHandler() {
+	if c.state == nil {
+		return
+	}
+
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	if c.state.controlLostKey == 0 {
+		return
+	}
+
+	C.disconnect_control_lost_cb(c.camera, c.state.controlLostID)
+
+	controlLost.Lock()
+	delete(controlLost.handlers, c.state.controlLostKey)
+	controlLost.Unlock()
+
+	c.state.controlLostKey = 0
+	c.state.controlLostID = 0
 }
 
 func (c *Camera) IsNil() bool {
@@ -773,8 +1066,14 @@ func (c *Camera) IsNil() bool {
 }
 
 //export go_control_lost_handler
-func go_control_lost_handler() {
-	if controlLostHandler != nil {
-		controlLostHandler()
+func go_control_lost_handler(key C.guintptr) {
+	controlLost.Lock()
+	hdl := controlLost.handlers[uintptr(key)]
+	controlLost.Unlock()
+
+	// Called without the lock held: the handler may well call back into this
+	// package, and holding the lock would deadlock it.
+	if hdl != nil {
+		hdl()
 	}
 }

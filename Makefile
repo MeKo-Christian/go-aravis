@@ -89,7 +89,7 @@ test-all: ## Run all tests including integration
 
 test-unit: ## Run unit tests only (mock/stub tests)
 	@echo "$(BOLD)Running unit tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... -run "TestMock|TestError|TestNewAravisError|TestStructural|TestConstants|TestBoundary|TestToBool|TestGetDataInto|TestGetCachedCString|TestCStringCache|TestBayer"
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... -run "TestMock|TestError|TestNewAravisError|TestStructural|TestConstants|TestBoundary|TestToBool|TestGetDataInto|TestGetCachedCString|TestCStringCache|TestBayer|TestCloseFlag|TestCloseOnZeroValue|TestCameraCloseUnrefs|TestStreamCloseUnrefs|TestOwnedDeviceClose|TestOpenDeviceFirstAvailable|TestBorrowedDevice|TestSetControlLostHandler|TestGetNumInterface"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
 test-integration: ## Run integration tests (requires camera)

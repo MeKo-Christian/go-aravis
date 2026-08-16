@@ -4,7 +4,11 @@ package aravis
 // #include <arv.h>
 // #include <stdlib.h>
 import "C"
-import "unsafe"
+
+import (
+	"errors"
+	"unsafe"
+)
 
 func GetDeviceId(index uint) (string, error) {
 	s, err := C.arv_get_device_id(C.uint(index))
@@ -33,39 +37,55 @@ func GetNumDevices() (uint, error) {
 	return uint(n), err
 }
 
-func GetNumInferface() (uint, error) {
+// GetNumInterface returns the number of available interfaces.
+func GetNumInterface() (uint, error) {
 	n, err := C.arv_get_n_interfaces()
 	return uint(n), err
+}
+
+// GetNumInferface is a misspelling of [GetNumInterface].
+//
+// Deprecated: use GetNumInterface instead.
+func GetNumInferface() (uint, error) {
+	return GetNumInterface()
 }
 
 func UpdateDeviceList() {
 	C.arv_update_device_list()
 }
 
-func OpenDevice() {
-	// TODO
+// OpenDevice opens the device with the given device id and returns it.
+// An empty id opens the first available device.
+//
+// The caller owns the returned device and must release it with
+// [Device.Close]. This is unlike [Camera.GetDevice], which borrows the
+// camera's device and must not be closed.
+func OpenDevice(id string) (Device, error) {
+	var gerror *C.GError
+	var d Device
+
+	// Aravis takes NULL, not the empty string, as the sentinel for "the first
+	// available device". C.CString("") would produce a non-NULL pointer to an
+	// empty id, which no device matches.
+	var cs *C.char
+	if id != "" {
+		cs = C.CString(id)
+		defer C.free(unsafe.Pointer(cs))
+	}
+
+	d.device = C.arv_open_device(cs, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		return Device{}, errorFromGError(gerror)
+	}
+
+	if d.device == nil {
+		return Device{}, errors.New("aravis returned a null pointer")
+	}
+	d.owned = newCloseFlag()
+
+	return d, nil
 }
 
 func Shutdown() {
 	C.arv_shutdown()
-}
-
-func InterfaceGetDeviceId() {
-	// TODO
-}
-
-func InterfaceGetDevicePhysicalId() {
-	// TODO
-}
-
-func InterfaceGetDeviceAddress() {
-	// TODO
-}
-
-func InterfaceGetNumDevices() {
-	// TODO
-}
-
-func InterfaceOpenDevice() {
-	// TODO
 }

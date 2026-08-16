@@ -22,6 +22,10 @@ import (
 
 type Stream struct {
 	stream *C.struct__ArvStream
+
+	// closed is shared by every copy of this Stream, so the stream is unreffed
+	// exactly once however many copies are closed. Nil for the zero value.
+	closed *closeFlag
 }
 
 func (s *Stream) PushBuffer(b Buffer) {
@@ -59,8 +63,22 @@ func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	return buf, err
 }
 
+// Close releases the underlying stream. It is safe to call Close more than
+// once, and safe to call on any copy of the same Stream: the stream is
+// unreffed exactly once. Neither this Stream nor any copy of it may be used
+// afterwards.
 func (s *Stream) Close() {
+	if s.stream == nil || !s.closed.claim() {
+		return
+	}
+
 	C.g_object_unref(C.gpointer(s.stream))
+}
+
+// IsClosed reports whether the stream has been released, by this value or by
+// any copy of it.
+func (s *Stream) IsClosed() bool {
+	return s.stream == nil || s.closed.isClosed()
 }
 
 func (s *Stream) SetPropertyLong(property string, value int64) {
