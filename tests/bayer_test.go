@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"testing"
 
-	aravis "github.com/hybridgroup/go-aravis"
+	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 // makeBayer builds a w x h BayerRG whose raw sample at (x, y) equals y*w+x, so

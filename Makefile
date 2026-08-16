@@ -7,7 +7,7 @@ SHELL := /bin/bash
 
 # Project information
 PROJECT_NAME := go-aravis
-MODULE_NAME := github.com/hybridgroup/go-aravis
+MODULE_NAME := github.com/MeKo-Christian/go-aravis
 GO_VERSION := 1.23
 
 # Directories
