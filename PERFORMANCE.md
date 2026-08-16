@@ -1,21 +1,35 @@
 # Performance Optimization Guide
 
-This document describes the performance optimizations available in go-aravis and how to use them for maximum speed.
+This document describes the lower-overhead paths available in go-aravis and when they are
+worth using.
+
+> **On numbers.** This guide deliberately contains no throughput, latency, or CPU figures.
+> Earlier revisions published a table of them; they were not produced by any benchmark in
+> this repository and could not be reproduced from it. The benchmarks under `tests/` skip
+> without camera hardware, so nothing here can be measured in CI except allocation counts.
+> The one quantitative claim that survives is the allocation behavior of `GetDataInto`,
+> which `TestGetDataIntoZeroAllocations` asserts with `testing.AllocsPerRun`. Measure your
+> own camera and network before sizing a system.
 
 ## Overview
 
-The go-aravis library now includes several performance optimizations that can significantly improve streaming performance and reduce CPU overhead:
+Three mechanisms reduce per-call overhead, plus the error type that reports failures:
 
-1. **String Constant Caching** - Eliminates repeated C string allocations
+1. **String Constant Caching** - Avoids repeated C string allocations for feature names
 2. **Zero-Copy Buffer Access** - Avoids memory copies for image data
-3. **Optimized Error Handling** - Reduces error allocation overhead
-4. **Fast API Methods** - Pre-optimized versions of common operations
+3. **Fast API Methods** - Variants of common operations built on the interned strings
+
+Error handling is *not* an optimization. It used to be described as one; see
+[Error Handling](#error-handling) for what it actually does.
 
 ## String Constant Caching
 
 ### Problem
 
-Every camera parameter access like `GetWidth()`, `SetExposureTime()` creates and frees C strings:
+Camera parameter accesses that go through a named GenICam feature allocate and free a C
+string for that name on every call. `GetWidth()` and `GetHeight()` do this. Note that not
+every setter does — `SetExposureTime()`, for instance, calls a dedicated Aravis entry
+point and never builds a feature-name string:
 
 ```go
 // Inefficient - creates C.CString("Width") every call
@@ -34,14 +48,17 @@ exposure, err := camera.GetExposureTimeFast()
 gain, err := camera.GetGainFast()
 ```
 
-### Performance Impact
+### What this buys you
 
-- **20-40% faster** for parameter access operations
-- **Zero memory allocations** for the common GenICam features interned at
+- **No per-call C string allocation** for the common GenICam features interned at
   startup. A feature name outside that set falls back to a temporary C string
   per call, so the cache cannot grow without bound when names are generated at
   runtime or come from user input
-- Particularly beneficial in streaming loops that adjust parameters
+- Most useful in streaming loops that adjust parameters every frame
+
+The saving is one small allocation and free per call. On real hardware the device
+round-trip dominates by orders of magnitude, so do not expect this to move a frame rate —
+it removes GC pressure, not wire time.
 
 ## Zero-Copy Buffer Access
 
@@ -65,8 +82,9 @@ if err != nil {
     return err
 }
 
-// WARNING: dataSlice is only valid until buffer is freed/reused
-// Process data immediately or copy if needed for later use
+// WARNING: dataSlice aliases memory owned by Aravis. It is invalidated as soon as
+// the buffer goes back to the stream via stream.PushBuffer — process the data
+// before that call, or copy what you need to keep.
 ```
 
 #### 2. Pre-allocated Buffer Copy (Fast and safe)
@@ -85,7 +103,7 @@ for {
     // Copy into pre-allocated buffer
     bytesRead, err := buffer.GetDataInto(dataBuffer)
     if err == nil {
-        // Process dataBuffer[:bytesRead]
+        process(dataBuffer[:bytesRead])
     }
 
     stream.PushBuffer(buffer)
@@ -103,28 +121,39 @@ if err != nil {
 // Use unsafe.Pointer for direct memory access
 ```
 
-### Performance Impact
+### What this buys you
 
-- **50-80% faster** buffer access in streaming applications
-- **Zero allocations** with pre-allocated buffers
-- **Dramatic reduction** in garbage collection pressure
+- `GetDataSlice` and `GetDataUnsafe` copy nothing at all; they hand you the C buffer
+- `GetDataInto` allocates nothing, verified by `TestGetDataIntoZeroAllocations`. Reaching
+  a true zero also required keeping Go pointers out of the cgo call: passing a Go pointer
+  to `arv_buffer_get_data` makes cgo heap-allocate the local, so a C wrapper returns
+  data and size together in a struct instead.
+- `GetData` allocates a fresh `[]byte` per frame. At megabytes per frame and tens of
+  frames per second, that is the single largest source of GC pressure in a naive loop.
 
-## Optimized Error Handling
+## Error Handling
+
+This is a correctness feature, not a performance one. Earlier revisions of this document
+claimed error pooling reduced allocation overhead; the pool was a no-op — it never
+returned anything to itself — and has been removed, along with the shared mutable error
+values it handed out.
 
 ### Features
 
 - **Stable messages for known error codes** - Common Aravis device errors use a
-  fixed message table instead of converting the GLib string
+  fixed message table instead of converting the GLib string. This avoids one
+  `C.GoString` per error; it does not avoid allocating the error.
 - **Error code access** - Structured error information
 - **Caller-owned errors** - Every error is freshly allocated, so callers can
-  never mutate shared state
+  never mutate shared state. This is deliberate, and costs one allocation per error.
 
 ### Usage
 
 ```go
-// Errors now include error codes for programmatic handling
+// Errors carry an error code for programmatic handling
 if err != nil {
-    if aravisErr, ok := err.(*aravis.AravisError); ok {
+    var aravisErr *aravis.AravisError
+    if errors.As(err, &aravisErr) {
         switch aravisErr.Code {
         case aravis.DEVICE_ERROR_TIMEOUT:
             // Handle timeout specifically
@@ -139,104 +168,78 @@ if err != nil {
 
 ## High-Performance Streaming Pattern
 
-Here's the recommended pattern for maximum streaming performance:
+A streaming loop that allocates nothing per frame. Pick **one** of the two data-access
+options — the zero-copy read and the pre-allocated copy are alternatives, not steps.
 
 ```go
-// Setup phase
-camera, err := aravis.NewCamera(deviceId)
-if err != nil {
-    return err
-}
-defer camera.Close()
-
-// Use fast methods for configuration
-camera.SetExposureTimeFast(10000) // 10ms exposure
-camera.SetGainFast(1.0)
-
-// Get dimensions efficiently
-width, _ := camera.GetWidthFast()
-height, _ := camera.GetHeightFast()
-payloadSize, _ := camera.GetPayloadSize()
-
-// Create stream
-stream, err := camera.CreateStream()
-if err != nil {
-    return err
-}
-defer stream.Close()
-
-// Pre-allocate buffers
-numBuffers := 5
-buffers := make([]aravis.Buffer, numBuffers)
-for i := 0; i < numBuffers; i++ {
-    buffer, err := aravis.NewBuffer(uint(payloadSize))
+func stream(deviceId string, timeout time.Duration, process func([]byte)) error {
+    camera, err := aravis.NewCamera(deviceId)
     if err != nil {
         return err
     }
-    buffers[i] = buffer
-    stream.PushBuffer(buffer)
-}
+    defer camera.Close()
 
-// Pre-allocate data buffer for zero-allocation copying
-dataBuffer := make([]byte, payloadSize)
+    // Use fast methods for configuration
+    camera.SetExposureTimeFast(10000) // 10 ms, in the camera's exposure unit
+    camera.SetGainFast(1.0)
 
-// Start acquisition
-camera.StartAcquisition()
-defer camera.StopAcquisition()
-
-// Streaming loop - maximum performance
-for {
-    buffer, err := stream.TimeoutPopBuffer(timeout)
+    payloadSize, err := camera.GetPayloadSize()
     if err != nil {
-        continue // Handle timeouts gracefully
+        return err
     }
 
-    // Check buffer status efficiently
-    status, err := buffer.GetStatus()
-    if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
+    stream, err := camera.CreateStream()
+    if err != nil {
+        return err
+    }
+    defer stream.Close()
+
+    // Fill the acquisition queue before starting
+    const numBuffers = 5
+    for range numBuffers {
+        buffer, err := aravis.NewBuffer(payloadSize)
+        if err != nil {
+            return err
+        }
         stream.PushBuffer(buffer)
-        continue
     }
 
-    // High-performance data access options:
+    // Pre-allocate the destination once, reuse it every frame
+    dataBuffer := make([]byte, payloadSize)
 
-    // Option 1: Zero-copy (fastest, use with care)
-    dataSlice, err := buffer.GetDataSlice()
-    if err == nil {
-        // Process dataSlice immediately
-        processImageData(dataSlice)
+    if err := camera.StartAcquisition(); err != nil {
+        return err
     }
+    defer camera.StopAcquisition()
 
-    // Option 2: Pre-allocated copy (fast and safe)
-    bytesRead, err := buffer.GetDataInto(dataBuffer)
-    if err == nil {
-        // Process dataBuffer[:bytesRead]
-        processImageData(dataBuffer[:bytesRead])
+    for {
+        buffer, err := stream.TimeoutPopBuffer(timeout)
+        if err != nil {
+            continue // Handle timeouts gracefully
+        }
+
+        status, err := buffer.GetStatus()
+        if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
+            stream.PushBuffer(buffer)
+            continue
+        }
+
+        // Option 1 — zero-copy. Fastest, but the slice dies at PushBuffer below,
+        // so process must not retain it.
+        //
+        //  if dataSlice, err := buffer.GetDataSlice(); err == nil {
+        //      process(dataSlice)
+        //  }
+
+        // Option 2 — pre-allocated copy. Allocation-free and safe to retain.
+        if bytesRead, err := buffer.GetDataInto(dataBuffer); err == nil {
+            process(dataBuffer[:bytesRead])
+        }
+
+        stream.PushBuffer(buffer)
     }
-
-    // Return buffer for reuse
-    stream.PushBuffer(buffer)
 }
 ```
-
-## Performance Measurements
-
-Based on testing with typical GigE Vision cameras:
-
-| Operation          | Standard Method | Optimized Method | Improvement  |
-| ------------------ | --------------- | ---------------- | ------------ |
-| Parameter Access   | 100 μs          | 60 μs            | 40% faster   |
-| Buffer Data Copy   | 2.5 ms          | 0.5 ms           | 80% faster   |
-| Zero-Copy Access   | 2.5 ms          | 0.05 ms          | 50x faster   |
-| Streaming (30 FPS) | 85% CPU         | 45% CPU          | 47% less CPU |
-
-## Memory Usage
-
-| Operation         | Standard Method | Optimized Method | Memory Saved |
-| ----------------- | --------------- | ---------------- | ------------ |
-| 100 param reads   | 5.2 KB          | 0 KB             | 100%         |
-| 1000 frame copies | 3.2 GB          | 0 KB             | 100%         |
-| Error handling    | 12 KB/sec       | 2 KB/sec         | 83%          |
 
 ## Best Practices
 

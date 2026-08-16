@@ -138,32 +138,56 @@ progress.
 
 ### P3 — Documentation accuracy (README / PERFORMANCE.md)
 
-- [ ] **Module path vs repo mismatch.** `go.mod` says
-      `github.com/hybridgroup/go-aravis` but the repo is
-      `github.com/MeKo-Christian/go-aravis`, so the fork is not `go get`-able by its
-      own path. Decide: rename the module to the fork path (and update all imports
-      and docs), or document the required `replace` directive.
-- [ ] **`SetThreadPriority(...)` does not exist.** README uses it 4× (lines ~152,
-      343–345). The real API is the `Camera.ThreadPriority` struct field. Fix the docs.
-- [ ] **Remove/annotate vaporware feature claims.** "Multiple Pixel Formats" and
-      "Full access to camera parameters" reference stubbed methods (see P1).
-- [ ] **Correct the false performance claims.** "Zero-allocation `GetDataInto`"
-      and "error pooling" are false at the code level; the benchmark numbers
-      (40%/80%/50x/"3.2 GB → 0 KB") are unreproducible (all benchmarks skip without
-      hardware and run on never-filled buffers). Remove or clearly mark as
-      aspirational, and commit reproducible numbers if kept.
-- [ ] **Fix Go version inconsistency.** README says "Go 1.21+", `go.mod` requires
-      1.23, Makefile says 1.21, CI uses 1.21/1.22; examples use integer `range`
-      (needs 1.22+). Pick one minimum (>= 1.22) and make everything consistent.
-- [ ] **Fix non-compiling README snippets** (`SetThreadPriority`, unused
-      `err`/`numParts`, undeclared `frameRate`/`payloadSize`) and mislabeled
-      "`TimeoutPopBuffer` — Non-blocking" (it blocks with a timeout; `TryPopBuffer`
-      is the non-blocking one and is undocumented).
-- [ ] **Add package doc / godoc comments.** No `doc.go`, most exported symbols in
-      `camera.go`/`device.go`/`interface.go`/`stream.go` are undocumented.
-- [ ] **Clarify fork provenance/attribution.** LICENSE (Chris Hiszpanski),
-      module owner (hybridgroup), and repo owner (MeKo-Christian) are three parties;
-      state the fork's provenance and add a CHANGELOG for what this fork changed.
+- [x] **Module path vs repo mismatch.** Renamed the module from
+      `github.com/hybridgroup/go-aravis` to `github.com/MeKo-Christian/go-aravis`, so
+      the fork resolves by its own path. All 22 in-repo import sites, `go.mod` and the
+      Makefile's `MODULE_NAME` were updated. Breaking for anyone on the old path; the
+      README and CHANGELOG document the one-line `go mod edit -replace` migration.
+- [x] **`SetThreadPriority(...)` does not exist.** All four uses replaced with
+      assignment to the `Camera.ThreadPriority` field, and the surrounding prose now
+      says explicitly that it is a field read by `CreateStream`, not a setter. Two
+      further invented names turned up in the same sweep and were fixed:
+      `SetGVPacketSize`/`SetGVPacketDelay` → `GVSetPacketSize`/`GVSetPacketDelay`.
+- [x] **Remove/annotate vaporware feature claims.** The P1 work made the pixel-format
+      claim true, so it stayed (noting the package exports no pixel-format constants).
+      The rest were narrowed to what the code does: "Chunk Data Processing" → detection
+      only, since only `HasChunks`/`GetChunkMode` exist and no chunk decoding is
+      wrapped; "comprehensive error detection and recovery" → status reporting, there
+      is no recovery logic; "Full access to camera parameters" → the parameters
+      actually covered, plus generic GenICam access via `Device`; "Bayer Pattern
+      Debayering" → RGGB only, nearest-neighbor only.
+- [x] **Correct the false performance claims.** Every benchmark figure was deleted
+      from both documents, with a note at the top of `PERFORMANCE.md` explaining why
+      (nothing in this repository produced them, and the benchmarks that exist skip
+      without hardware). The "error pooling reduces allocation overhead" claim was
+      not merely unmeasured but false after P2 deleted the pool — error handling is now
+      described as a correctness feature that costs one allocation per error. The one
+      surviving quantitative claim is the zero-allocation `GetDataInto`, which P2 made
+      true and `TestGetDataIntoZeroAllocations` asserts in CI.
+- [x] **Fix Go version inconsistency.** `go.mod`, the Makefile, the Dockerfile and CI
+      were already unified on 1.23 by P4; only the README still claimed 1.21/1.22, in
+      four places (including a fictitious "tests run on Go 1.21 and 1.22" matrix). All
+      now say 1.23. The apt package name was stale too — `libaravis-0.8-dev` was
+      renamed `libaravis-dev` on Ubuntu 24.04, which is what broke CI in P4.
+- [x] **Fix non-compiling README snippets.** Verified mechanically rather than by
+      inspection: all 17 fenced Go blocks in `README.md` and `PERFORMANCE.md` are
+      extracted, the fragments wrapped in a function against the real package, and
+      compiled. All 17 build. The mislabeled "`TimeoutPopBuffer` — Non-blocking" is
+      corrected, and `TryPopBuffer` — the genuinely non-blocking call, previously
+      absent from both documents — is now listed alongside `PopBuffer` with the
+      blocking behavior of each spelled out.
+- [x] **Add package doc / godoc comments.** Added `doc.go` covering the acquisition
+      call order, the value-type/shared-close-flag semantics and why there is no
+      finalizer, the owned-vs-borrowed `Device` split, the pixel-data accessor tradeoffs
+      and the lifetime rule that aliasing slices die at `PushBuffer`, error handling,
+      concurrency, and GigE Vision setup. Every exported symbol is now documented:
+      179 of 179, with none non-conforming, checked with a go/ast pass rather than by
+      eye. Three floating section comments that godoc had been misattributing to a
+      single following method were folded into per-symbol docs, and the dead
+      commented-out policy methods in `device.go` were deleted.
+- [x] **Clarify fork provenance/attribution.** Added a Provenance section to the README
+      naming all three parties and their roles, and `CHANGELOG.md` recording what this
+      fork changed across P0–P4, with breaking changes called out separately.
 
 ### P4 — Build, CI, and tooling
 
@@ -222,10 +246,63 @@ hard-deprecated. The library stays on Aravis 0.8 (current stable).
 - [ ] **Stop advertising unrunnable benchmarks** as measured results, or make
       them run on synthetic filled buffers so numbers are reproducible in CI.
 
+### P6 — Correctness bugs found while documenting (new, not yet fixed)
+
+Writing godoc for every exported symbol meant reading every function body against the
+Aravis call it wraps, which surfaced a fresh set of bugs. None were fixed in the P3
+docs-only pass; the documentation describes current behavior, including where that
+behavior is wrong. Ordered by severity.
+
+- [ ] **`errno` is being reported as an error across the package.** Many methods use
+      cgo's two-result form (`v, err := C.arv_...`), where the second value is `errno`.
+      `errno` is not cleared by a successful call, so a stale or incidental value makes
+      a successful call return a non-nil error. Only the `GError` should decide failure.
+      Affects all 12 `*Fast` methods in `performance.go`, plus `GetData`, `GetDataSlice`,
+      `GetDataUnsafe`, `GetDataInto`, `GetStatus`, `GetNumParts`, `GetPartData` and the
+      three pop methods. Worst case is `NewBuffer` (`buffer.go`), whose
+      `if err != nil || buffer == nil` reports failure *and* drops the successfully
+      allocated `ArvBuffer` on the floor, leaking it — it should key off `buffer == nil`
+      alone.
+- [ ] **`Device.ReadMemory(addr, 0)` panics.** It does `make([]byte, size)` then takes
+      `&buffer[0]`, which is out of range for a zero size. `WriteMemory` has the
+      equivalent guard; `ReadMemory` does not.
+- [ ] **The generic `Device` getters swallow every GenICam error.**
+      `GetStringFeatureValue`, `GetIntegerFeatureValue` and `GetFloatFeatureValue` pass
+      `nil` for the `GError` out-param, so a failure returns the zero value with no
+      error — and the error they *do* return is the `errno` above. This is the read-side
+      counterpart of the P0 fix to the setters.
+- [ ] **`TakeControl`/`LeaveControl` cast unconditionally via `ARV_GV_DEVICE()`** with no
+      `ARV_IS_GV_DEVICE` check, so calling either on a USB3 Vision device trips a GLib
+      critical and passes a bad pointer.
+- [ ] **`Camera.GetDevice` and `Camera.IsGVDevice` always return a nil error**, and
+      `GetDevice` never checks `arv_camera_get_device` for NULL, so a caller can receive
+      a `Device` wrapping a nil pointer with no indication anything failed. No method on
+      `Device` except `Close`/`IsClosed` nil-guards its receiver, so that NULL then
+      reaches Aravis.
+- [ ] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
+      both as a freshly allocated `errors.New("aravis returned a null pointer")`, which
+      is non-comparable, so callers cannot use `errors.Is` to detect a dropped frame.
+      A package-level sentinel would fix it. Separately, a negative `time.Duration`
+      converts to a huge unsigned value, turning a nonsensical timeout into an
+      effectively infinite block.
+- [ ] **`BayerRG.At` uses the wrong CFA phase for an odd-origin rect.** `At` derives the
+      phase from absolute `x&1`/`y&1` while `sample` indexes relative to `Rect.Min`, so
+      for any rect with an odd `Min.X`/`Min.Y` every color is off by one Bayer site.
+      `At` should use `(x-Rect.Min.X)&1` / `(y-Rect.Min.Y)&1`.
+- [ ] **A standalone `Buffer` cannot be freed.** `Buffer` has no `Close`, so a buffer
+      from `NewBuffer` that is never handed to a stream leaks unconditionally. Documented
+      as the current contract, but it is an API gap.
+- [ ] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
+      against `GetNumParts`; `SetGainAuto` has no `GetGainAuto` counterpart although
+      `arv_camera_get_gain_auto` exists; `GetFrameRateBounds`/`GetGainBounds` cast
+      `*float64` to `*C.double` through `unsafe.Pointer` where `GetExposureTimeBounds`
+      correctly declares `C.double` locals.
+
 ### Suggested execution order
 
-1. P0 correctness bugs (safety)
-2. P4 build/CI (so changes are verifiable)
-3. P5 pure-Go tests (lock in behavior)
-4. P1/P2 API + perf machinery
-5. P3 docs (describe the now-true reality)
+1. P0 correctness bugs (safety) — done
+2. P4 build/CI (so changes are verifiable) — done
+3. P5 pure-Go tests (lock in behavior) — partly done
+4. P1/P2 API + perf machinery — done
+5. P3 docs (describe the now-true reality) — done
+6. P6 correctness bugs surfaced by the P3 doc pass, then the rest of P5
