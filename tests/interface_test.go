@@ -38,7 +38,7 @@ func TestDeviceDiscovery(t *testing.T) {
 // TestInterfaceDiscovery tests interface enumeration.
 func TestInterfaceDiscovery(t *testing.T) {
 	// Test getting number of interfaces
-	numInterfaces, err := aravis.GetNumInferface() // Note: keeping original typo for compatibility
+	numInterfaces, err := aravis.GetNumInterface()
 	if err != nil {
 		t.Fatalf("Failed to get number of interfaces: %v", err)
 	}

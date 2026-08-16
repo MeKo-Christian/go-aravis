@@ -21,11 +21,11 @@ func TestMockOperations(t *testing.T) {
 	}
 
 	// Test getting interface count
-	numInterfaces, err := aravis.GetNumInferface()
+	numInterfaces, err := aravis.GetNumInterface()
 	if err != nil {
-		t.Errorf("GetNumInferface() failed: %v", err)
+		t.Errorf("GetNumInterface() failed: %v", err)
 	} else {
-		t.Logf("GetNumInferface() returned: %d", numInterfaces)
+		t.Logf("GetNumInterface() returned: %d", numInterfaces)
 	}
 
 	// Test shutdown
@@ -151,11 +151,11 @@ func TestStructuralOperations(t *testing.T) {
 		t.Logf("Consistent device count: %d", devices1)
 	}
 
-	interfaces1, err1 := aravis.GetNumInferface()
+	interfaces1, err1 := aravis.GetNumInterface()
 
-	interfaces2, err2 := aravis.GetNumInferface()
+	interfaces2, err2 := aravis.GetNumInterface()
 	if err1 != nil || err2 != nil {
-		t.Logf("GetNumInferface() errors: %v, %v", err1, err2)
+		t.Logf("GetNumInterface() errors: %v, %v", err1, err2)
 	} else if interfaces1 != interfaces2 {
 		t.Errorf("Inconsistent interface count: %d vs %d", interfaces1, interfaces2)
 	} else {
