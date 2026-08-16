@@ -2,6 +2,7 @@ package tests
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -101,7 +102,13 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 		buffer, err := stream.TimeoutPopBuffer(time.Second)
 		if err != nil {
 			// A non-nil error implies a zero Buffer, so there is nothing to
-			// hand back here.
+			// hand back here. Anything other than a timeout is a defect rather
+			// than a dropped frame, and the sentinel is what lets the loop tell
+			// them apart.
+			if !errors.Is(err, aravis.ErrTimeout) {
+				t.Errorf("TimeoutPopBuffer() returned %v; want a frame or ErrTimeout", err)
+			}
+
 			t.Logf("stopped after %d frames: %v", framesAcquired, err)
 
 			break
@@ -265,6 +272,13 @@ func TestStreamingPerformance(t *testing.T) {
 	for time.Since(startTime) < testDuration {
 		buffer, err := stream.TimeoutPopBuffer(100 * time.Millisecond)
 		if err != nil {
+			// Only a timeout may be counted as one: before the sentinel existed
+			// this branch swallowed every other failure as "no frame this
+			// round".
+			if !errors.Is(err, aravis.ErrTimeout) {
+				t.Fatalf("TimeoutPopBuffer() returned %v; want a frame or ErrTimeout", err)
+			}
+
 			timeoutCount++
 
 			continue
