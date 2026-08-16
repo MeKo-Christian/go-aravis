@@ -89,6 +89,21 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
 - **`SetLineRate` discarded its error.**
 - **`arv_set_node_feature_value` crashed on a NULL feature.** It now reports
   `ARV_DEVICE_ERROR_FEATURE_NOT_FOUND` instead.
+- **`Device.ReadMemory(address, 0)` panicked.** It allocated a zero-length slice and then
+  took the address of its first element. A zero-size read is now rejected with an error,
+  matching how `WriteMemory` rejects an empty write.
+- **`TakeControl`/`LeaveControl` cast unconditionally through `ARV_GV_DEVICE()`.** cgo
+  compiles with `-O2`, which makes GLib compile its cast checks out, so calling either on
+  a non-GigE device — Aravis's own Fake backend, or any USB3 Vision camera — did not even
+  produce a CRITICAL: it dereferenced the wrong struct and segfaulted the process. Both
+  helpers now check `ARV_IS_GV_DEVICE` and report `ARV_DEVICE_ERROR_WRONG_FEATURE`.
+- **`Camera.GetDevice` and `Camera.IsGVDevice` always returned a nil error,** and
+  `GetDevice` never checked `arv_camera_get_device` for NULL, so a caller could receive a
+  `Device` wrapping nothing with no indication anything had failed. Both now return a real
+  error, and every `Device` method in `device.go` guards its receiver against a nil *and* a
+  closed device instead of passing NULL — or, after `Close`, a dangling pointer — to
+  Aravis, which asserted and logged a CRITICAL. The `*Fast` accessors in `performance.go`
+  still need the same guard; that file belongs to a parallel P6 change.
 - `GetDataSlice` no longer uses the deprecated `reflect.SliceHeader`.
 - **`get_image` example error handling**: `http.Error` calls fell through instead of
   returning, `TimeoutPopBuffer`'s error went unchecked, and a bad-status branch
