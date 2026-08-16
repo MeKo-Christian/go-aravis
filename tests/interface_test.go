@@ -89,14 +89,18 @@ func TestInterfaceDiscovery(t *testing.T) {
 // TestOutOfRangeIdsReturnEmptyString covers the accessor boundary. Aravis
 // returns NULL for an index past the end, which C.GoString turns into "".
 //
-// The error is deliberately not asserted: GetDeviceId and GetInterfaceId use
-// cgo's two-result form, so their second result is errno, not an Aravis
-// failure (see P6 in PLAN.md) — both return a nil error here today. Asserting a
-// non-nil error would encode that bug into the test suite; asserting a nil one
-// would encode the stale-errno behaviour. The string is the contract.
+// Neither accessor has a GError channel, so ("", nil) is the whole contract and
+// both halves are asserted below.
 func TestOutOfRangeIdsReturnEmptyString(t *testing.T) {
-	numDevices, _ := aravis.GetNumDevices()
-	numInterfaces, _ := aravis.GetNumInterface()
+	numDevices, err := aravis.GetNumDevices()
+	if err != nil {
+		t.Fatalf("GetNumDevices() returned error: %v", err)
+	}
+
+	numInterfaces, err := aravis.GetNumInterface()
+	if err != nil {
+		t.Fatalf("GetNumInterface() returned error: %v", err)
+	}
 
 	tests := []struct {
 		name  string
@@ -111,7 +115,12 @@ func TestOutOfRangeIdsReturnEmptyString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if id, _ := tt.get(tt.index); id != "" {
+			id, err := tt.get(tt.index)
+			if err != nil {
+				t.Errorf("returned error %v; an out-of-range index is not a failure", err)
+			}
+
+			if id != "" {
 				t.Errorf("id = %q, want the empty string", id)
 			}
 		})

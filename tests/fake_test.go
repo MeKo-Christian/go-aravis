@@ -86,9 +86,11 @@ func run(m *testing.M) int {
 // selectFakeBackend enables the Fake interface and, unless real hardware was
 // asked for, disables every other one.
 func selectFakeBackend(keepHardware bool) error {
-	// The error from GetNumInterface is cgo's errno, not an Aravis failure
-	// (see P6 in PLAN.md), so only the count is trustworthy here.
-	n, _ := aravis.GetNumInterface()
+	n, err := aravis.GetNumInterface()
+	if err != nil {
+		return fmt.Errorf("GetNumInterface: %w", err)
+	}
+
 	if n == 0 {
 		return errors.New("aravis reports no interfaces at all")
 	}
@@ -96,7 +98,11 @@ func selectFakeBackend(keepHardware bool) error {
 	found := false
 
 	for i := range n {
-		id, _ := aravis.GetInterfaceId(i)
+		id, err := aravis.GetInterfaceId(i)
+		if err != nil {
+			return fmt.Errorf("GetInterfaceId(%d): %w", i, err)
+		}
+
 		if id == fakeInterface {
 			found = true
 
@@ -251,26 +257,14 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 
 	filled, popErr := stream.TimeoutPopBuffer(popTimeout)
 
-	// A popped buffer belongs to the caller: Stream.Close frees only what is
-	// still sitting in the stream's queues, and Buffer has no Close of its own
-	// (see P6 in PLAN.md), so pushing it back is the only way to release it.
-	//
-	// This is registered after the stream's own cleanup, and t.Cleanup runs
-	// last-in-first-out, so the push-back happens before Stream.Close — which
-	// is what makes Stream.Close able to free it. It is registered before the
-	// error checks below because TimeoutPopBuffer can hand back a valid buffer
-	// alongside a non-nil error: that error is cgo's errno, not an Aravis
-	// failure (P6 again).
-	if !filled.IsNil() {
-		tb.Cleanup(func() { stream.PushBuffer(filled) })
-	}
-
 	// Stop as soon as the frame is in hand: nothing should keep acquiring
 	// underneath a benchmark.
 	if err := camera.StopAcquisition(); err != nil {
 		tb.Errorf("StopAcquisition() returned error: %v", err)
 	}
 
+	// A non-nil error from a pop now implies a zero Buffer, so the error can be
+	// checked before there is anything to hand back.
 	if popErr != nil {
 		tb.Fatalf("TimeoutPopBuffer() returned error: %v", popErr)
 	}
@@ -278,6 +272,15 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 	if filled.IsNil() {
 		tb.Fatalf("TimeoutPopBuffer() returned a nil buffer")
 	}
+
+	// A popped buffer belongs to the caller: Stream.Close frees only what is
+	// still sitting in the stream's queues, and Buffer has no Close of its own
+	// (see P6 in PLAN.md), so pushing it back is the only way to release it.
+	//
+	// This is registered after the stream's own cleanup, and t.Cleanup runs
+	// last-in-first-out, so the push-back happens before Stream.Close — which
+	// is what makes Stream.Close able to free it.
+	tb.Cleanup(func() { stream.PushBuffer(filled) })
 
 	if status, err := filled.GetStatus(); err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
 		tb.Fatalf("GetStatus() = %d, %v; want %d, nil", status, err, aravis.BUFFER_STATUS_SUCCESS)

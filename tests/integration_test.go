@@ -100,14 +100,8 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 
 		buffer, err := stream.TimeoutPopBuffer(time.Second)
 		if err != nil {
-			// A non-nil error does not mean there is no buffer: that result is
-			// cgo's errno rather than an Aravis failure (see P6), so ownership
-			// may still have transferred. Give it back before leaving, or
-			// Stream.Close cannot free it.
-			if !buffer.IsNil() {
-				stream.PushBuffer(buffer)
-			}
-
+			// A non-nil error implies a zero Buffer, so there is nothing to
+			// hand back here.
 			t.Logf("stopped after %d frames: %v", framesAcquired, err)
 
 			break
