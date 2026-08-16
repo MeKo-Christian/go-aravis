@@ -438,8 +438,17 @@ func TestGainAutoRoundTrip(t *testing.T) {
 		t.Errorf("GetGainAuto() = %d, want the Fake default AUTO_OFF (%d)", original, aravis.AUTO_OFF)
 	}
 
-	// The loop ends on AUTO_OFF, so it restores the mode itself; a t.Cleanup
-	// would run after the deferred Close and touch a closed camera.
+	// Restore the mode even when an assertion below calls Fatalf, which unwinds
+	// through the defers rather than reaching the end of the loop. This has to
+	// be a defer, not a t.Cleanup: cleanups run after the deferred Close, so the
+	// restore would address a closed camera and trip a GLib CRITICAL. Declared
+	// after the Close defer, it therefore runs before it.
+	//
+	// Each NewCamera mints its own ArvFakeDevice, so a leaked mode cannot reach
+	// another test; this keeps the test self-contained against future edits that
+	// reorder the modes or add assertions after the loop.
+	defer func() { _ = camera.SetGainAuto(original) }()
+
 	for _, mode := range []int{aravis.AUTO_CONTINUOUS, aravis.AUTO_ONCE, aravis.AUTO_OFF} {
 		if err := camera.SetGainAuto(mode); err != nil {
 			t.Fatalf("SetGainAuto(%d) returned error: %v", mode, err)
