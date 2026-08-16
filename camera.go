@@ -317,54 +317,172 @@ func (c *Camera) GetWidthBounds() (int, int, error) {
 	return int(minVal), int(maxVal), err
 }
 
-func (c *Camera) SetBinning() {
-	// TODO
+func (c *Camera) SetBinning(dx, dy int) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_binning(c.camera, C.gint(dx), C.gint(dy), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
+// GetBinning returns the current horizontal and vertical binning factors.
 func (c *Camera) GetBinning() (int, int, error) {
 	var gerror *C.GError
 	var err error
 
-	var minBin, maxBin C.gint
+	var dx, dy C.gint
 	C.arv_camera_get_binning(
 		c.camera,
-		&minBin,
-		&maxBin,
+		&dx,
+		&dy,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 
-	return int(minBin), int(maxBin), err
+	return int(dx), int(dy), err
 }
 
-func (c *Camera) SetPixelFormat() {
-	// TODO
+func (c *Camera) SetPixelFormat(format uint32) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_pixel_format(c.camera, C.ArvPixelFormat(format), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
-func (c *Camera) GetPixelFormat() {
-	// TODO
+func (c *Camera) GetPixelFormat() (uint32, error) {
+	var gerror *C.GError
+	var err error
+
+	format := C.arv_camera_get_pixel_format(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return uint32(format), err
 }
 
-func (c *Camera) GetPixelFormatAsString() {
-	// TODO
+func (c *Camera) GetPixelFormatAsString() (string, error) {
+	var gerror *C.GError
+	var err error
+
+	// The returned string is owned by Aravis and must not be freed.
+	format := C.arv_camera_get_pixel_format_as_string(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+		return "", err
+	}
+
+	return C.GoString(format), err
 }
 
-func (c *Camera) SetPixelFormatFromString() {
-	// TODO
+func (c *Camera) SetPixelFormatFromString(format string) error {
+	var gerror *C.GError
+	var err error
+
+	cs := C.CString(format)
+	defer C.free(unsafe.Pointer(cs))
+
+	C.arv_camera_set_pixel_format_from_string(c.camera, cs, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
-func (c *Camera) GetAvailablePixelFormats() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormats() ([]uint32, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// The returned array is owned by the caller and has to be freed.
+	formats := C.arv_camera_dup_available_pixel_formats(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if formats == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(formats))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]uint32, 0, int(n))
+	for _, format := range unsafe.Slice(formats, int(n)) {
+		result = append(result, uint32(format))
+	}
+
+	return result, err
 }
 
-func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() ([]string, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// Only the array itself is owned by the caller, not the strings it holds.
+	names := C.arv_camera_dup_available_pixel_formats_as_display_names(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if names == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(names))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]string, 0, int(n))
+	for _, name := range unsafe.Slice(names, int(n)) {
+		result = append(result, C.GoString(name))
+	}
+
+	return result, err
 }
 
-func (c *Camera) GetAvailablePixelFormatsAsStrings() {
-	// TODO
+func (c *Camera) GetAvailablePixelFormatsAsStrings() ([]string, error) {
+	var gerror *C.GError
+	var err error
+	var n C.guint
+
+	// Only the array itself is owned by the caller, not the strings it holds.
+	formats := C.arv_camera_dup_available_pixel_formats_as_strings(c.camera, &n, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	if formats == nil {
+		return nil, err
+	}
+	defer C.g_free(C.gpointer(formats))
+
+	if n == 0 {
+		return nil, err
+	}
+
+	result := make([]string, 0, int(n))
+	for _, format := range unsafe.Slice(formats, int(n)) {
+		result = append(result, C.GoString(format))
+	}
+
+	return result, err
 }
 
 func (c *Camera) StartAcquisition() error {
@@ -579,8 +697,22 @@ func (c *Camera) GetExposureTime() (float64, error) {
 	return float64(cdouble), err
 }
 
-func (c *Camera) GetExposureTimeBounds() {
-	// TODO
+func (c *Camera) GetExposureTimeBounds() (float64, float64, error) {
+	var gerror *C.GError
+	var err error
+
+	var minVal, maxVal C.double
+	C.arv_camera_get_exposure_time_bounds(
+		c.camera,
+		&minVal,
+		&maxVal,
+		&gerror,
+	)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return float64(minVal), float64(maxVal), err
 }
 
 func (c *Camera) SetExposureTimeAuto(mode int) error {
@@ -595,8 +727,16 @@ func (c *Camera) SetExposureTimeAuto(mode int) error {
 	return err
 }
 
-func (c *Camera) GetExposureTimeAuto() {
-	// TODO
+func (c *Camera) GetExposureTimeAuto() (int, error) {
+	var gerror *C.GError
+	var err error
+
+	mode := C.arv_camera_get_exposure_time_auto(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return int(mode), err
 }
 
 func (c *Camera) SetGain(gain float64) error {
@@ -640,8 +780,16 @@ func (c *Camera) GetGainBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
-func (c *Camera) SetGainAuto() {
-	// TODO
+func (c *Camera) SetGainAuto(mode int) error {
+	var gerror *C.GError
+	var err error
+
+	C.arv_camera_set_gain_auto(c.camera, C.ArvAuto(mode), &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return err
 }
 
 func (c *Camera) GetPayloadSize() (uint, error) {
