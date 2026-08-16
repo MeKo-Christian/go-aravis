@@ -14,10 +14,10 @@ import (
 // can be passed to [NewCamera] or [OpenDevice]. Call [UpdateDeviceList] before
 // enumerating; index must be less than the count returned by [GetNumDevices].
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. An out-of-range index yields the empty string.
-func GetDeviceId(index uint) (string, error) {
-	return C.GoString(C.arv_get_device_id(C.uint(index))), nil
+// An out-of-range index yields the empty string; there is no error to check,
+// because the underlying Aravis call cannot report a failure.
+func GetDeviceId(index uint) string {
+	return C.GoString(C.arv_get_device_id(C.uint(index)))
 }
 
 // GetInterfaceId returns the id of the interface at index, for example "GigEVision"
@@ -25,10 +25,10 @@ func GetDeviceId(index uint) (string, error) {
 // [GetNumInterface]. The id is what [EnableInterface] and [DisableInterface]
 // expect.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. An out-of-range index yields the empty string.
-func GetInterfaceId(index uint) (string, error) {
-	return C.GoString(C.arv_get_interface_id(C.uint(index))), nil
+// An out-of-range index yields the empty string; there is no error to check,
+// because the underlying Aravis call cannot report a failure.
+func GetInterfaceId(index uint) string {
+	return C.GoString(C.arv_get_interface_id(C.uint(index)))
 }
 
 // DisableInterface removes the interface with the given id from the list of
@@ -54,24 +54,24 @@ func EnableInterface(id string) {
 // Call [UpdateDeviceList] first, otherwise the count reflects an empty or
 // outdated list.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
+// There is no error to check; the underlying Aravis call cannot report a
 // failure.
-func GetNumDevices() (uint, error) {
-	return uint(C.arv_get_n_devices()), nil
+func GetNumDevices() uint {
+	return uint(C.arv_get_n_devices())
 }
 
 // GetNumInterface returns the number of available interfaces.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
+// There is no error to check; the underlying Aravis call cannot report a
 // failure.
-func GetNumInterface() (uint, error) {
-	return uint(C.arv_get_n_interfaces()), nil
+func GetNumInterface() uint {
+	return uint(C.arv_get_n_interfaces())
 }
 
 // GetNumInferface is a misspelling of [GetNumInterface].
 //
 // Deprecated: use GetNumInterface instead.
-func GetNumInferface() (uint, error) {
+func GetNumInferface() uint {
 	return GetNumInterface()
 }
 

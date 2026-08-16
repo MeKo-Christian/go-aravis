@@ -13,11 +13,7 @@ func main() {
 	aravis.UpdateDeviceList()
 
 	// Get number of devices
-	numDev, err := aravis.GetNumDevices()
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	numDev := aravis.GetNumDevices()
 	if numDev == 0 {
 		fmt.Println("No cameras found. This example demonstrates advanced buffer features.")
 		fmt.Println("Connect a camera to test multipart and chunk data capabilities.")
@@ -28,10 +24,7 @@ func main() {
 	fmt.Printf("Found %d device(s)\n", numDev)
 
 	// Use the first device
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		log.Fatal(err)
-	}
+	deviceId := aravis.GetDeviceId(0)
 
 	fmt.Printf("Using device: %s\n", deviceId)
 
@@ -112,10 +105,7 @@ func main() {
 	defer buffer.Close()
 
 	// Check buffer status
-	status, err := buffer.GetStatus()
-	if err != nil {
-		log.Fatal(err)
-	}
+	status := buffer.GetStatus()
 
 	fmt.Printf("Buffer status: %d\n", status)
 
@@ -128,90 +118,82 @@ func main() {
 	fmt.Println("\n=== Multipart Buffer Analysis ===")
 
 	// Check number of parts
-	numParts, err := buffer.GetNumParts()
-	if err != nil {
-		fmt.Printf("Error getting number of parts: %v\n", err)
-	} else {
-		fmt.Printf("Number of parts: %d\n", numParts)
+	numParts := buffer.GetNumParts()
+	fmt.Printf("Number of parts: %d\n", numParts)
 
-		// Analyze each part
-		for index := range numParts {
-			fmt.Printf("\n--- Part %d ---\n", index)
+	// Analyze each part
+	for index := range numParts {
+		fmt.Printf("\n--- Part %d ---\n", index)
 
-			// Get part data
-			partData, err := buffer.GetPartData(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d data: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d data size: %d bytes\n", index, len(partData))
-			}
-
-			// Get part component ID
-			componentId, err := buffer.GetPartComponentId(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d component ID: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d component ID: %d\n", index, componentId)
-			}
-
-			// Get part data type
-			dataType, err := buffer.GetPartDataType(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d data type: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d data type: %d\n", index, dataType)
-			}
-
-			// Get part pixel format
-			pixelFormat, err := buffer.GetPartPixelFormat(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d pixel format: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d pixel format: 0x%x\n", index, pixelFormat)
-			}
-
-			// Get part dimensions and position
-			width, err := buffer.GetPartWidth(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d width: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d width: %d\n", index, width)
-			}
-
-			height, err := buffer.GetPartHeight(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d height: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d height: %d\n", index, height)
-			}
-
-			x, err := buffer.GetPartX(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d x: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d x position: %d\n", index, x)
-			}
-
-			y, err := buffer.GetPartY(index)
-			if err != nil {
-				fmt.Printf("Error getting part %d y: %v\n", index, err)
-			} else {
-				fmt.Printf("Part %d y position: %d\n", index, y)
-			}
+		// Get part data
+		partData, err := buffer.GetPartData(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d data: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d data size: %d bytes\n", index, len(partData))
 		}
 
-		// Test finding component
-		if numParts > 0 {
-			// Try to find the first component
-			componentId, _ := buffer.GetPartComponentId(0)
-
-			partIndex, err := buffer.FindComponent(componentId)
-			if err != nil {
-				fmt.Printf("Error finding component %d: %v\n", componentId, err)
-			} else {
-				fmt.Printf("Component %d found at part index: %d\n", componentId, partIndex)
-			}
+		// Get part component ID
+		componentId, err := buffer.GetPartComponentId(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d component ID: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d component ID: %d\n", index, componentId)
 		}
+
+		// Get part data type
+		dataType, err := buffer.GetPartDataType(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d data type: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d data type: %d\n", index, dataType)
+		}
+
+		// Get part pixel format
+		pixelFormat, err := buffer.GetPartPixelFormat(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d pixel format: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d pixel format: 0x%x\n", index, pixelFormat)
+		}
+
+		// Get part dimensions and position
+		width, err := buffer.GetPartWidth(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d width: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d width: %d\n", index, width)
+		}
+
+		height, err := buffer.GetPartHeight(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d height: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d height: %d\n", index, height)
+		}
+
+		x, err := buffer.GetPartX(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d x: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d x position: %d\n", index, x)
+		}
+
+		y, err := buffer.GetPartY(index)
+		if err != nil {
+			fmt.Printf("Error getting part %d y: %v\n", index, err)
+		} else {
+			fmt.Printf("Part %d y position: %d\n", index, y)
+		}
+	}
+
+	// Test finding component
+	if numParts > 0 {
+		// Try to find the first component
+		componentId, _ := buffer.GetPartComponentId(0)
+
+		fmt.Printf("Component %d found at part index: %d\n",
+			componentId, buffer.FindComponent(componentId))
 	}
 
 	// === CHUNK DATA ANALYSIS ===
@@ -231,15 +213,11 @@ func main() {
 	fmt.Println("\n=== Standard Buffer Data ===")
 
 	// Get standard buffer data
-	data, err := buffer.GetData()
-	if err != nil {
-		fmt.Printf("Error getting buffer data: %v\n", err)
-	} else {
-		fmt.Printf("Buffer data size: %d bytes\n", len(data))
+	data := buffer.GetData()
+	fmt.Printf("Buffer data size: %d bytes\n", len(data))
 
-		if len(data) > 0 {
-			fmt.Printf("First 16 bytes: %x\n", data[:minInt(16, len(data))])
-		}
+	if len(data) > 0 {
+		fmt.Printf("First 16 bytes: %x\n", data[:minInt(16, len(data))])
 	}
 
 	fmt.Println("\nAdvanced buffer analysis complete!")

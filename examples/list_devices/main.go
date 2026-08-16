@@ -9,10 +9,7 @@ import (
 func main() {
 	aravis.UpdateDeviceList()
 
-	numDev, err := aravis.GetNumDevices()
-	if err != nil {
-		log.Fatal(err)
-	}
+	numDev := aravis.GetNumDevices()
 
 	log.Println("Devices:", numDev)
 

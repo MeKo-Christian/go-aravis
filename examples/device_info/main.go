@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 
 	aravis "github.com/MeKo-Christian/go-aravis"
 )
@@ -12,10 +11,7 @@ func main() {
 	aravis.UpdateDeviceList()
 
 	// Get number of devices
-	numDev, err := aravis.GetNumDevices()
-	if err != nil {
-		log.Fatal(err)
-	}
+	numDev := aravis.GetNumDevices()
 
 	fmt.Printf("Found %d devices\n", numDev)
 
@@ -24,11 +20,7 @@ func main() {
 		fmt.Printf("\n--- Device %d ---\n", i)
 
 		// Get device ID
-		deviceId, err := aravis.GetDeviceId(i)
-		if err != nil {
-			fmt.Printf("Error getting device ID: %v\n", err)
-			continue
-		}
+		deviceId := aravis.GetDeviceId(i)
 
 		fmt.Printf("Device ID: %s\n", deviceId)
 

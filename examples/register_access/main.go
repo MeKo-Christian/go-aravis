@@ -17,11 +17,7 @@ func main() {
 	aravis.UpdateDeviceList()
 
 	// Get number of devices
-	numDev, err := aravis.GetNumDevices()
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	numDev := aravis.GetNumDevices()
 	if numDev == 0 {
 		fmt.Println("No cameras found. This example demonstrates register/memory access.")
 		fmt.Println("Connect a camera to test low-level register operations.")
@@ -32,10 +28,7 @@ func main() {
 	fmt.Printf("Found %d device(s)\n", numDev)
 
 	// Use the first device
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		log.Fatal(err)
-	}
+	deviceId := aravis.GetDeviceId(0)
 
 	fmt.Printf("Using device: %s\n", deviceId)
 

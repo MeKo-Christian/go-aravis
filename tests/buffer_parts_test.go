@@ -77,11 +77,7 @@ func TestPartAccessorsRejectOutOfRangeIndex(t *testing.T) {
 	buf := newTestBuffer(t)
 	defer buf.Close()
 
-	numParts, err := buf.GetNumParts()
-	if err != nil {
-		t.Fatalf("GetNumParts() returned error: %v", err)
-	}
-
+	numParts := buf.GetNumParts()
 	if numParts != 1 {
 		t.Fatalf("GetNumParts() = %d on a fresh buffer, want 1", numParts)
 	}

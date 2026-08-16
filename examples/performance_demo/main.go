@@ -16,21 +16,14 @@ func main() {
 	aravis.UpdateDeviceList()
 
 	// Get number of devices
-	n, err := aravis.GetNumDevices()
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	n := aravis.GetNumDevices()
 	if n == 0 {
 		fmt.Println("No cameras found. Connect a camera to test high-performance features.")
 		return
 	}
 
 	// Use the first device
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		log.Fatal(err)
-	}
+	deviceId := aravis.GetDeviceId(0)
 
 	fmt.Printf("Using device: %s\n", deviceId)
 
@@ -150,8 +143,7 @@ func main() {
 		}
 
 		// Check buffer status
-		status, err := buffer.GetStatus()
-		if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
+		if buffer.GetStatus() != aravis.BUFFER_STATUS_SUCCESS {
 			if err := stream.PushBuffer(buffer); err != nil {
 				log.Fatal(err)
 			}
@@ -165,17 +157,16 @@ func main() {
 		switch frameCount % 100 {
 		case 1:
 			// Method 1: Zero-copy slice access (WARNING: requires careful memory management)
-			dataSlice, err := buffer.GetDataSlice()
-			if err == nil {
+			// An empty payload yields a nil slice, so check the length before
+			// indexing into it.
+			if dataSlice := buffer.GetDataSlice(); len(dataSlice) >= 4 {
 				fmt.Printf("Frame %d - Zero-copy access: %d bytes (first 4 bytes: %x)\n",
 					frameCount, len(dataSlice), dataSlice[:4])
 			}
 		case 50:
 			// Method 2: Copy into pre-allocated buffer (no allocations)
-			bytesRead, err := buffer.GetDataInto(dataSlice)
-			if err == nil {
-				fmt.Printf("Frame %d - Pre-allocated copy: %d bytes\n", frameCount, bytesRead)
-			}
+			fmt.Printf("Frame %d - Pre-allocated copy: %d bytes\n",
+				frameCount, buffer.GetDataInto(dataSlice))
 		}
 
 		// Return buffer to stream for reuse

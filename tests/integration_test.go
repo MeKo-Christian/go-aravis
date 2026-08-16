@@ -114,22 +114,15 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 			break
 		}
 
-		status, err := buffer.GetStatus()
-
-		// Both of the failures below used to `continue` without advancing
+		// The failure below used to `continue` without advancing
 		// framesAcquired, so a backend that kept returning bad buffers would
 		// spin here forever — the loop is bounded by frames acquired, not by
-		// iterations or by a deadline. Since either condition is already a hard
+		// iterations or by a deadline. Since the condition is already a hard
 		// failure, return the buffer and stop.
-		if err != nil {
-			t.Errorf("GetStatus() on frame %d returned error: %v", framesAcquired, err)
-			pushBack(t, stream, buffer)
-
-			break
-		}
-
+		//
 		// The Fake backend drops no packets, so anything but SUCCESS is a real
 		// failure rather than the flaky-link case a hardware run allows for.
+		status := buffer.GetStatus()
 		if status != aravis.BUFFER_STATUS_SUCCESS {
 			if isFake {
 				t.Errorf("frame %d has status %d, want %d (SUCCESS)",
@@ -165,38 +158,20 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 func checkFrameData(t *testing.T, buffer aravis.Buffer, frameNum int, payloadSize uint) {
 	t.Helper()
 
-	data, err := buffer.GetData()
-	if err != nil {
-		t.Errorf("frame %d: GetData() returned error: %v", frameNum, err)
-
-		return
-	}
-
+	data := buffer.GetData()
 	if uint(len(data)) != payloadSize {
 		t.Errorf("frame %d: GetData() returned %d bytes, want the payload size %d",
 			frameNum, len(data), payloadSize)
 	}
 
-	slice, err := buffer.GetDataSlice()
-	if err != nil {
-		t.Errorf("frame %d: GetDataSlice() returned error: %v", frameNum, err)
-
-		return
-	}
-
+	slice := buffer.GetDataSlice()
 	if !bytes.Equal(data, slice) {
 		t.Errorf("frame %d: GetData() and GetDataSlice() disagree", frameNum)
 	}
 
 	dest := make([]byte, len(data))
 
-	n, err := buffer.GetDataInto(dest)
-	if err != nil {
-		t.Errorf("frame %d: GetDataInto() returned error: %v", frameNum, err)
-
-		return
-	}
-
+	n := buffer.GetDataInto(dest)
 	if n != len(data) {
 		t.Errorf("frame %d: GetDataInto() = %d, want %d", frameNum, n, len(data))
 	}
@@ -284,8 +259,7 @@ func TestStreamingPerformance(t *testing.T) {
 			continue
 		}
 
-		status, err := buffer.GetStatus()
-		if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
+		if buffer.GetStatus() != aravis.BUFFER_STATUS_SUCCESS {
 			errorCount++
 
 			pushBack(t, stream, buffer)
@@ -297,8 +271,9 @@ func TestStreamingPerformance(t *testing.T) {
 
 		// Exercise the zero-allocation copy on the way past.
 		if frameCount%10 == 0 {
-			if _, err := buffer.GetDataInto(destBuffer); err != nil {
-				t.Errorf("GetDataInto() on frame %d returned error: %v", frameCount, err)
+			if n := buffer.GetDataInto(destBuffer); n != len(destBuffer) {
+				t.Errorf("GetDataInto() on frame %d copied %d bytes, want %d",
+					frameCount, n, len(destBuffer))
 			}
 		}
 
@@ -344,10 +319,7 @@ func TestMultipleDevices(t *testing.T) {
 		t.Skip("Skipping multiple device test in short mode")
 	}
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil {
-		t.Fatalf("GetNumDevices() returned error: %v", err)
-	}
+	numDevices := aravis.GetNumDevices()
 
 	// Fake_1 is excluded deliberately. With one physical camera attached the
 	// device list holds two entries, and counting Fake as the second would let
@@ -356,11 +328,7 @@ func TestMultipleDevices(t *testing.T) {
 	deviceIDs := make([]string, 0, numDevices)
 
 	for i := range numDevices {
-		id, err := aravis.GetDeviceId(i)
-		if err != nil {
-			t.Fatalf("GetDeviceId(%d) returned error: %v", i, err)
-		}
-
+		id := aravis.GetDeviceId(i)
 		if id != fakeDeviceID {
 			deviceIDs = append(deviceIDs, id)
 		}
