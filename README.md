@@ -1,6 +1,6 @@
 # go-aravis
 
-**A comprehensive Go wrapper around libaravis 0.8+ for GigE Vision and USB3 Vision camera control**
+**A comprehensive Go wrapper around libaravis 0.8.25+ for GigE Vision and USB3 Vision camera control**
 
 This library provides Go bindings for the Aravis library, enabling high-performance machine vision applications with support for GigE Vision and USB3 Vision cameras. Built with CGO for optimal performance and direct access to advanced camera features.
 
@@ -56,7 +56,10 @@ If you need libaravis 0.6 support, go to the original package at https://github.
 
 ### System Dependencies
 
-- **libaravis 0.8+**: Core Aravis library with development headers
+- **libaravis 0.8.25+**: Core Aravis library with development headers. The floor is
+  0.8.25 rather than 0.8 because `Buffer.FindComponent` wraps
+  `arv_buffer_find_component`, added in that release; against an older 0.8 the package
+  fails to compile.
 - **Go 1.23+**: Matches the `go` directive in `go.mod`; CGO must be enabled
 - **pkg-config**: For library linking configuration
 
@@ -195,20 +198,26 @@ func main() {
     frameCount := 0
     for frameCount < 100 {  // Capture 100 frames
         buffer, err := stream.TimeoutPopBuffer(time.Second)
-        if err != nil {
+
+        // A popped buffer belongs to us, and a non-nil buffer can come back
+        // together with a non-nil error — so decide on IsNil, not on err.
+        // Skipping the push back would drain the queue and stall acquisition.
+        if buffer.IsNil() {
             log.Printf("Frame timeout: %v", err)
             continue
         }
 
-        // Check frame quality
-        status, _ := buffer.GetStatus()
-        if status == aravis.BUFFER_STATUS_SUCCESS {
-            data, _ := buffer.GetData()
-            fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
-            frameCount++
+        if err == nil {
+            // Check frame quality
+            status, _ := buffer.GetStatus()
+            if status == aravis.BUFFER_STATUS_SUCCESS {
+                data, _ := buffer.GetData()
+                fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
+                frameCount++
 
-            // Process your image data here
-            // ...
+                // Process your image data here
+                // ...
+            }
         }
 
         // Return buffer to stream
@@ -461,7 +470,8 @@ data, err := buffer.GetData()
 // until the buffer is handed back with stream.PushBuffer.
 dataSlice, err := buffer.GetDataSlice()
 
-// Copies into a caller-owned slice, allocating nothing
+// Copies into a caller-owned slice, allocating nothing. The copy survives
+// PushBuffer, but reusing one destination means each frame overwrites the last.
 payloadSize, _ := camera.GetPayloadSize()
 dataBuffer := make([]byte, payloadSize) // Pre-allocate once, reuse every frame
 bytesRead, err := buffer.GetDataInto(dataBuffer)

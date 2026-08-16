@@ -46,13 +46,16 @@ type Stream struct {
 
 // PushBuffer hands a buffer to the stream's input queue so it can be filled
 // with the next frame, wrapping arv_stream_push_buffer. The stream takes
-// ownership of the buffer and releases it when the stream is closed.
+// ownership of the buffer and releases it, along with every other buffer still
+// in its queues, when the stream is closed. This is the only way to give a
+// buffer back: a buffer the caller holds is never freed by Stream.Close.
 //
 // Push both freshly allocated buffers (from NewBuffer) and buffers you have
 // finished reading after a pop. From the moment of the push the payload memory
-// belongs to the stream again, so any slice or pointer obtained from
-// Buffer.GetDataSlice or Buffer.GetDataUnsafe for that buffer becomes invalid
-// here — copy the data out first if you still need it.
+// belongs to the stream again, which may refill it with the next frame at any
+// time, so any slice or pointer obtained from Buffer.GetDataSlice or
+// Buffer.GetDataUnsafe for that buffer must not be used past this call — copy
+// the data out first if you still need it.
 func (s *Stream) PushBuffer(b Buffer) {
 	C.arv_stream_push_buffer(s.stream, b.buffer)
 }
@@ -64,9 +67,12 @@ func (s *Stream) PushBuffer(b Buffer) {
 // delivers a frame blocks the calling goroutine forever. Use
 // TimeoutPopBuffer when you need a deadline, or TryPopBuffer to poll.
 //
-// The returned buffer remains owned by the stream: check Buffer.GetStatus,
-// read the data, then return it with PushBuffer. A returned buffer may be nil
-// (Buffer.IsNil) if the stream had nothing to hand out.
+// Aravis transfers ownership of the returned buffer to the caller, so it is
+// yours until you hand it back: check Buffer.GetStatus, read the data, then
+// return it with PushBuffer. Stream.Close frees only the buffers still in the
+// stream's queues, and this package has no Buffer.Close, so a popped buffer
+// that is never pushed back leaks with no way to release it. A returned buffer
+// may be nil (Buffer.IsNil) if the stream had nothing to hand out.
 func (s *Stream) PopBuffer() (Buffer, error) {
 	var b Buffer
 	var err error
@@ -82,8 +88,8 @@ func (s *Stream) PopBuffer() (Buffer, error) {
 // it returns a nil Buffer (Buffer.IsNil reports true) rather than waiting.
 // Always test the result with IsNil before using it.
 //
-// As with PopBuffer the buffer stays owned by the stream and should be
-// returned with PushBuffer after use.
+// As with PopBuffer, ownership of a non-nil buffer passes to the caller and it
+// must be returned with PushBuffer after use, or it leaks.
 func (s *Stream) TryPopBuffer() (Buffer, error) {
 	var b Buffer
 	var err error
@@ -99,17 +105,21 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 // non-blocking accessor — and it is the usual choice in an acquisition loop
 // that must stay responsive when a frame is dropped.
 //
-// Aravis takes the timeout in microseconds, so t is divided by 1000 (a
-// time.Duration counts nanoseconds). The division truncates: any t below one
-// microsecond becomes a timeout of 0, which makes the call return at once
-// instead of waiting for the sub-microsecond interval that was asked for.
-// Sub-millisecond values are also rounded down to whole microseconds.
+// t must not be negative. Aravis takes the timeout as an unsigned count of
+// microseconds, so t is divided by 1000 (a time.Duration counts nanoseconds)
+// and converted; a negative duration converts to an enormous unsigned value and
+// the call then waits effectively forever instead of returning. The division
+// truncates: any t below one microsecond becomes a timeout of 0, which makes
+// the call return at once instead of waiting for the sub-microsecond interval
+// that was asked for. Sub-millisecond values are also rounded down to whole
+// microseconds.
 //
 // If no buffer arrives within the timeout, the call returns the zero Buffer
 // together with an error stating that Aravis returned a null pointer; a
 // timeout is therefore not distinguishable from other null results. On success
-// the buffer stays owned by the stream and should be returned with PushBuffer
-// after its status has been checked and its data read.
+// Aravis transfers ownership of the buffer to the caller, which must return it
+// with PushBuffer once its status has been checked and its data read —
+// Stream.Close will not free a buffer that is still popped.
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	var buf Buffer
 	var err error

@@ -72,19 +72,22 @@ const (
 // image (plus any chunk or multipart data that came with it).
 //
 // Buffer is a small value type holding a C pointer; copying it copies the
-// pointer, not the payload. It deliberately has no Close method, because a
-// buffer is never owned by the Go code that reads it:
+// pointer, not the payload. It has no Close method, which makes ownership worth
+// following closely, because it moves back and forth:
 //
-//   - Buffers you allocate with NewBuffer are handed to a stream via
-//     Stream.PushBuffer, and from that moment the stream owns them. They are
-//     released together with the stream when Stream.Close runs.
-//   - Buffers obtained from Stream.PopBuffer, Stream.TryPopBuffer or
-//     Stream.TimeoutPopBuffer are still owned by that stream. Read what you
-//     need and push them back with Stream.PushBuffer so the stream can reuse
-//     them; do not attempt to free them yourself.
+//   - A buffer you allocate with NewBuffer starts out yours.
+//   - Stream.PushBuffer transfers it to the stream. Stream.Close releases every
+//     buffer still sitting in the stream's queues at that point.
+//   - Stream.PopBuffer, Stream.TryPopBuffer and Stream.TimeoutPopBuffer transfer
+//     it back to you. While a buffer is popped it is outside the stream's
+//     queues, so Stream.Close will not free it.
 //
-// A buffer created with NewBuffer and never pushed into a stream is therefore
-// leaked, as there is no API to release it on its own.
+// Since this package exposes no way to release a buffer on its own, a buffer is
+// leaked whenever it is in the caller's hands and the stream goes away: one that
+// NewBuffer created and nothing ever pushed, and one that was popped and never
+// pushed back. Push a popped buffer back even on an error path — the pop methods
+// can return a non-nil buffer together with a non-nil error, so branch on
+// Buffer.IsNil rather than on the error.
 type Buffer struct {
 	buffer *C.struct__ArvBuffer
 }

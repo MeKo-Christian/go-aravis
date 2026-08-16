@@ -89,6 +89,11 @@ if err != nil {
 
 #### 2. Pre-allocated Buffer Copy (Fast and safe)
 
+The copy is yours and outlives `PushBuffer`, unlike the zero-copy slice. It is only
+stable until the next frame is copied into the same destination, though, so anything
+retaining a frame past the current iteration needs its own copy or its own destination
+buffer.
+
 ```go
 // Pre-allocate buffer once
 dataBuffer := make([]byte, payloadSize)
@@ -96,7 +101,13 @@ dataBuffer := make([]byte, payloadSize)
 // In streaming loop - no allocations
 for {
     buffer, err := stream.TimeoutPopBuffer(timeout)
+    // Push back whatever we got: a popped buffer is ours, and a non-nil buffer
+    // can arrive together with a non-nil error.
+    if buffer.IsNil() {
+        continue
+    }
     if err != nil {
+        stream.PushBuffer(buffer)
         continue
     }
 
@@ -168,8 +179,13 @@ if err != nil {
 
 ## High-Performance Streaming Pattern
 
-A streaming loop that allocates nothing per frame. Pick **one** of the two data-access
-options — the zero-copy read and the pre-allocated copy are alternatives, not steps.
+A streaming loop whose own frame handling allocates nothing. Pick **one** of the two
+data-access options — the zero-copy read and the pre-allocated copy are alternatives,
+not steps.
+
+Only the successful path through the wrapper is allocation-free, and only
+`GetDataInto` is asserted to be so by a test. A timed-out iteration allocates a fresh
+error, and whatever `process` does is its own business.
 
 ```go
 func stream(deviceId string, timeout time.Duration, process func([]byte)) error {
@@ -214,26 +230,30 @@ func stream(deviceId string, timeout time.Duration, process func([]byte)) error 
 
     for {
         buffer, err := stream.TimeoutPopBuffer(timeout)
-        if err != nil {
-            continue // Handle timeouts gracefully
+
+        // A popped buffer belongs to us, and the pop can hand back a valid buffer
+        // together with a non-nil error. Branch on IsNil, not on err, or the queue
+        // drains one buffer per error until acquisition stalls for good.
+        if buffer.IsNil() {
+            continue // Nothing to recycle
         }
 
-        status, err := buffer.GetStatus()
-        if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
-            stream.PushBuffer(buffer)
-            continue
-        }
+        if err == nil {
+            if status, serr := buffer.GetStatus(); serr == nil && status == aravis.BUFFER_STATUS_SUCCESS {
+                // Option 1 — zero-copy. Fastest, but the slice is invalidated by
+                // the PushBuffer below, so process must not retain it.
+                //
+                //  if dataSlice, derr := buffer.GetDataSlice(); derr == nil {
+                //      process(dataSlice)
+                //  }
 
-        // Option 1 — zero-copy. Fastest, but the slice dies at PushBuffer below,
-        // so process must not retain it.
-        //
-        //  if dataSlice, err := buffer.GetDataSlice(); err == nil {
-        //      process(dataSlice)
-        //  }
-
-        // Option 2 — pre-allocated copy. Allocation-free and safe to retain.
-        if bytesRead, err := buffer.GetDataInto(dataBuffer); err == nil {
-            process(dataBuffer[:bytesRead])
+                // Option 2 — pre-allocated copy. Survives PushBuffer, but every
+                // iteration overwrites dataBuffer, so process must copy anything
+                // it keeps beyond the current frame.
+                if bytesRead, derr := buffer.GetDataInto(dataBuffer); derr == nil {
+                    process(dataBuffer[:bytesRead])
+                }
+            }
         }
 
         stream.PushBuffer(buffer)

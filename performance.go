@@ -76,11 +76,22 @@ func getCachedCString(s string) (cstr *C.char, mustFree bool) {
 
 // Fast versions of common camera operations using cached strings.
 //
-// The *Fast methods behave exactly like their regular counterparts but look
-// their GenICam feature name up in the intern table built at startup instead of
-// converting it with C.CString on every call. Only names listed in
-// commonFeatures are served from that table; any other name still gets a
-// temporary C allocation that is freed before the call returns. The table is
+// The *Fast methods look their GenICam feature name up in the intern table
+// built at startup instead of converting it with C.CString on every call. Only
+// names listed in commonFeatures are served from that table; any other name
+// still gets a temporary C allocation that is freed before the call returns.
+//
+// They are not always drop-in replacements. Reading a named feature is what the
+// regular width and height accessors do too, so those pairs match. The exposure
+// and gain variants do not: the regular Camera methods call the dedicated
+// arv_camera_* accessors, which resolve whichever feature a given camera
+// actually implements, whereas the Fast variants address the fixed "ExposureTime"
+// and "Gain" nodes. On a camera that Aravis maps to a differently named feature
+// the regular method works and the Fast one fails, so treat these as an
+// optimization to reach for once a camera is known to support them, not as a
+// default.
+//
+// The table is
 // never freed by design — it is bounded by the fixed set of feature names the
 // package interns, and the raw *C.char pointers it hands out have no lifetime
 // tracking that would make reclaiming them safe.

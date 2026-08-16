@@ -289,9 +289,14 @@ behavior is wrong. Ordered by severity.
       phase from absolute `x&1`/`y&1` while `sample` indexes relative to `Rect.Min`, so
       for any rect with an odd `Min.X`/`Min.Y` every color is off by one Bayer site.
       `At` should use `(x-Rect.Min.X)&1` / `(y-Rect.Min.Y)&1`.
-- [ ] **A standalone `Buffer` cannot be freed.** `Buffer` has no `Close`, so a buffer
-      from `NewBuffer` that is never handed to a stream leaks unconditionally. Documented
-      as the current contract, but it is an API gap.
+- [ ] **A `Buffer` in the caller's hands cannot be freed.** `Buffer` has no `Close`, and
+      `Stream.Close` releases only the buffers still sitting in the stream's queues.
+      Aravis gives ownership of a popped buffer to the caller
+      (`arv_stream_pop_buffer` is `transfer-ownership="full"`), so *two* cases leak with
+      no way to release them: a buffer from `NewBuffer` that is never pushed, and a
+      popped buffer that is never pushed back. Raised in PR review, where it also turned
+      out the P3 docs had this backwards — they claimed a popped buffer stayed
+      stream-owned. The docs are corrected; the API gap stands.
 - [ ] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
       against `GetNumParts`; `SetGainAuto` has no `GetGainAuto` counterpart although
       `arv_camera_get_gain_auto` exists; `GetFrameRateBounds`/`GetGainBounds` cast

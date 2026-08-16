@@ -244,7 +244,10 @@ func (c *Camera) CreateStream() (Stream, error) {
 // opposite of OpenDevice, which hands ownership to the caller.
 //
 // The returned error is always nil; it exists for signature symmetry with the
-// rest of the API.
+// rest of the API. It is not a success indicator: the underlying call can
+// return NULL and this method does not check, so a nil Device can come back
+// alongside that nil error. Test the result with Device.IsNil before calling
+// anything on it.
 func (c *Camera) GetDevice() (Device, error) {
 	var d Device
 	var err error
@@ -1144,8 +1147,10 @@ func (c *Camera) GVSetPacketSize(size int) error {
 }
 
 // GetChunkMode reports whether chunk data is enabled, that is, whether the
-// camera appends metadata chunks to the image buffers. See Buffer.HasChunks
-// for reading them back.
+// camera appends metadata chunks to the image buffers. Buffer.HasChunks then
+// reports whether a given frame actually carries them. Neither the chunk
+// contents nor their layout is exposed — this package wraps no chunk decoder,
+// so reading the values back requires going through the device directly.
 func (c *Camera) GetChunkMode() (bool, error) {
 	var gerror *C.GError
 	var err error

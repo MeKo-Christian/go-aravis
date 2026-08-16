@@ -336,6 +336,10 @@ func (d *Device) IsNil() bool {
 // ReadMemory reads size bytes from the device memory starting at address and
 // returns them.
 //
+// size must be greater than zero. The implementation indexes the destination
+// slice without checking, so ReadMemory(address, 0) panics rather than
+// returning an empty slice.
+//
 // This is low-level access intended for advanced users. Prefer GenICam feature
 // access whenever the information is available as a feature; the register map
 // is device specific, so consult the camera documentation before using it. See
