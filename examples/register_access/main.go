@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	aravis "github.com/hybridgroup/go-aravis"
+	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 func main() {

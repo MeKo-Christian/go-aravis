@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	aravis "github.com/hybridgroup/go-aravis"
+	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 // TestFullWorkflow tests a complete camera workflow from discovery to image acquisition.

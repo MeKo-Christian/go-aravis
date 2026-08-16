@@ -25,12 +25,30 @@ var errorMessages = map[int]string{
 	int(C.ARV_DEVICE_ERROR_FEATURE_NOT_FOUND): "feature not found",
 }
 
-// AravisError provides structured error information with error code
+// AravisError is the structured error type this package returns for failures
+// reported by libaravis. Code carries the underlying Aravis device error code
+// and corresponds to the DEVICE_ERROR_* constants declared in device.go;
+// Message is a human readable description, either a stable message for a known
+// code or the message produced by GLib for anything else.
+//
+// Errors are always returned as *AravisError, never as an AravisError value,
+// so callers should inspect them with errors.As:
+//
+//	var aerr *aravis.AravisError
+//	if errors.As(err, &aerr) && aerr.Code == aravis.DEVICE_ERROR_TIMEOUT {
+//		// handle timeout
+//	}
+//
+// Each returned error is freshly allocated and owned by the caller.
 type AravisError struct {
-	Code    int
+	// Code is the Aravis device error code (see the DEVICE_ERROR_*
+	// constants in device.go).
+	Code int
+	// Message is the human readable description of the failure.
 	Message string
 }
 
+// Error returns the error message, implementing the error interface.
 func (e *AravisError) Error() string {
 	return e.Message
 }

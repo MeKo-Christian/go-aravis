@@ -20,6 +20,22 @@ import (
 	"unsafe"
 )
 
+// Stream wraps an ArvStream, the object that receives image data from a
+// camera. Create one with Camera.CreateStream.
+//
+// A stream owns two buffer queues. Buffers you allocate with NewBuffer and
+// hand over with PushBuffer go into the input queue, where the receiving
+// thread fills them; filled buffers move to the output queue and are taken out
+// again with PopBuffer, TryPopBuffer or TimeoutPopBuffer. The usual pattern is
+// to push a handful of buffers before starting acquisition and then to recycle
+// each popped buffer with PushBuffer once its data has been read or copied.
+// The stream owns every buffer it holds and releases them when it is closed.
+//
+// Stream is a value type and may be copied freely: every copy refers to the
+// same underlying ArvStream and shares one close flag (see lifecycle.go), so
+// Close is idempotent and unrefs the stream exactly once no matter how many
+// copies are closed, from whichever goroutine. The zero value owns nothing and
+// its Close is a no-op.
 type Stream struct {
 	stream *C.struct__ArvStream
 
@@ -28,10 +44,35 @@ type Stream struct {
 	closed *closeFlag
 }
 
+// PushBuffer hands a buffer to the stream's input queue so it can be filled
+// with the next frame, wrapping arv_stream_push_buffer. The stream takes
+// ownership of the buffer and releases it, along with every other buffer still
+// in its queues, when the stream is closed. This is the only way to give a
+// buffer back: a buffer the caller holds is never freed by Stream.Close.
+//
+// Push both freshly allocated buffers (from NewBuffer) and buffers you have
+// finished reading after a pop. From the moment of the push the payload memory
+// belongs to the stream again, which may refill it with the next frame at any
+// time, so any slice or pointer obtained from Buffer.GetDataSlice or
+// Buffer.GetDataUnsafe for that buffer must not be used past this call — copy
+// the data out first if you still need it.
 func (s *Stream) PushBuffer(b Buffer) {
 	C.arv_stream_push_buffer(s.stream, b.buffer)
 }
 
+// PopBuffer takes the next filled buffer from the stream's output queue,
+// wrapping arv_stream_pop_buffer. It blocks indefinitely until a buffer
+// becomes available; there is no timeout and no way to cancel the wait other
+// than stopping acquisition or destroying the stream, so a camera that never
+// delivers a frame blocks the calling goroutine forever. Use
+// TimeoutPopBuffer when you need a deadline, or TryPopBuffer to poll.
+//
+// Aravis transfers ownership of the returned buffer to the caller, so it is
+// yours until you hand it back: check Buffer.GetStatus, read the data, then
+// return it with PushBuffer. Stream.Close frees only the buffers still in the
+// stream's queues, and this package has no Buffer.Close, so a popped buffer
+// that is never pushed back leaks with no way to release it. A returned buffer
+// may be nil (Buffer.IsNil) if the stream had nothing to hand out.
 func (s *Stream) PopBuffer() (Buffer, error) {
 	var b Buffer
 	var err error
@@ -41,6 +82,14 @@ func (s *Stream) PopBuffer() (Buffer, error) {
 	return b, err
 }
 
+// TryPopBuffer takes the next filled buffer from the stream's output queue if
+// one is already available, wrapping arv_stream_try_pop_buffer. This is the
+// non-blocking accessor: it returns immediately, and when no buffer is ready
+// it returns a nil Buffer (Buffer.IsNil reports true) rather than waiting.
+// Always test the result with IsNil before using it.
+//
+// As with PopBuffer, ownership of a non-nil buffer passes to the caller and it
+// must be returned with PushBuffer after use, or it leaks.
 func (s *Stream) TryPopBuffer() (Buffer, error) {
 	var b Buffer
 	var err error
@@ -50,6 +99,27 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 	return b, err
 }
 
+// TimeoutPopBuffer takes the next filled buffer from the stream's output
+// queue, blocking for at most t, and wraps arv_stream_timeout_pop_buffer. It
+// is a blocking call with a deadline, not a polling one — TryPopBuffer is the
+// non-blocking accessor — and it is the usual choice in an acquisition loop
+// that must stay responsive when a frame is dropped.
+//
+// t must not be negative. Aravis takes the timeout as an unsigned count of
+// microseconds, so t is divided by 1000 (a time.Duration counts nanoseconds)
+// and converted; a negative duration converts to an enormous unsigned value and
+// the call then waits effectively forever instead of returning. The division
+// truncates: any t below one microsecond becomes a timeout of 0, which makes
+// the call return at once instead of waiting for the sub-microsecond interval
+// that was asked for. Sub-millisecond values are also rounded down to whole
+// microseconds.
+//
+// If no buffer arrives within the timeout, the call returns the zero Buffer
+// together with an error stating that Aravis returned a null pointer; a
+// timeout is therefore not distinguishable from other null results. On success
+// Aravis transfers ownership of the buffer to the caller, which must return it
+// with PushBuffer once its status has been checked and its data read —
+// Stream.Close will not free a buffer that is still popped.
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	var buf Buffer
 	var err error
@@ -81,6 +151,16 @@ func (s *Stream) IsClosed() bool {
 	return s.stream == nil || s.closed.isClosed()
 }
 
+// SetPropertyLong sets an integer GObject property on the underlying stream,
+// for example the GigE Vision tuning knobs "packet-timeout",
+// "frame-retention", "packet-resend" or "socket-buffer-size" (all in
+// microseconds where they denote a duration). It calls g_object_set through a
+// small C wrapper.
+//
+// There is no error return and no validation: an unknown property name, or one
+// whose type is not a long, only produces a GLib runtime warning on stderr and
+// leaves the stream unchanged. Use SetPropertyDouble for floating point
+// properties.
 func (s *Stream) SetPropertyLong(property string, value int64) {
 	cprop := C.CString(property)
 	cvalue := C.long(value)
@@ -88,6 +168,13 @@ func (s *Stream) SetPropertyLong(property string, value int64) {
 	C.free(unsafe.Pointer(cprop))
 }
 
+// SetPropertyDouble sets a floating point GObject property on the underlying
+// stream, for example "packet-request-ratio". The value is widened to a C
+// double and passed to g_object_set through a small C wrapper.
+//
+// There is no error return and no validation: an unknown property name, or one
+// whose type is not a double, only produces a GLib runtime warning on stderr
+// and leaves the stream unchanged. Use SetPropertyLong for integer properties.
 func (s *Stream) SetPropertyDouble(property string, value float32) {
 	cprop := C.CString(property)
 	cvalue := C.double(value)
@@ -95,6 +182,10 @@ func (s *Stream) SetPropertyDouble(property string, value float32) {
 	C.free(unsafe.Pointer(cprop))
 }
 
+// IsNil reports whether the Stream holds no underlying ArvStream, which is the
+// case for the zero value and for the stream returned by a failed
+// Camera.CreateStream. Unlike IsClosed it says nothing about whether a real
+// stream has already been released.
 func (s *Stream) IsNil() bool {
 	return s.stream == nil
 }

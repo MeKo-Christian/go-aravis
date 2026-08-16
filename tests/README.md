@@ -215,7 +215,8 @@ The test suite includes comprehensive performance benchmarks:
 **CGO compilation errors**
 
 - Verify Aravis development headers: `pkg-config --exists aravis-0.8`
-- Install required packages: `sudo apt install libaravis-0.8-dev`
+- Install required packages: `sudo apt install libaravis-dev` (the package is named
+  `libaravis-0.8-dev` on releases older than Ubuntu 24.04; both ship Aravis 0.8)
 - Check Go CGO support: `go env CGO_ENABLED`
 
 ### Debug Mode

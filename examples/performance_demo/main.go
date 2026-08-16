@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	aravis "github.com/hybridgroup/go-aravis"
+	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 // Example demonstrating high-performance streaming using new optimizations.

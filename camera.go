@@ -65,11 +65,26 @@ import (
 	"unsafe"
 )
 
+// ThreadPriorityType selects the scheduling priority Aravis applies to the
+// thread that receives stream buffers. It is set through the Camera's
+// ThreadPriority field and is read by CreateStream when the stream is created.
 type ThreadPriorityType int
 
 const (
+	// ThreadPriorityNormal leaves the stream thread at its default scheduling
+	// priority. This is the zero value, so it applies unless ThreadPriority is
+	// set explicitly.
 	ThreadPriorityNormal ThreadPriorityType = iota
+	// ThreadPriorityRealtime asks Aravis to move the stream thread to realtime
+	// scheduling (arv_make_thread_realtime with priority 10) when the thread
+	// starts. This usually requires elevated privileges or an RLIMIT_RTPRIO
+	// allowance; on failure Aravis only prints a message and the thread keeps
+	// its normal priority.
 	ThreadPriorityRealtime
+	// ThreadPriorityHigh asks Aravis to raise the stream thread's priority
+	// without realtime scheduling (arv_make_thread_high_priority with nice
+	// value -10). On failure Aravis only prints a message and the thread keeps
+	// its normal priority.
 	ThreadPriorityHigh
 )
 
@@ -90,25 +105,61 @@ type cameraState struct {
 	controlLostID C.gulong
 }
 
+// Camera is a handle on an Aravis camera (ArvCamera), the high-level entry
+// point for controlling a GigE Vision or USB3 Vision device.
+//
+// Camera is a value type and may be copied freely: every copy refers to the
+// same underlying camera and shares its lifecycle state. Close must be called
+// once the camera is no longer needed; it is idempotent per underlying camera,
+// so calling it on several copies still unrefs the camera exactly once, and
+// neither the closed value nor any copy of it may be used afterwards. The zero
+// value owns nothing, and its Close is a no-op.
+//
+// A Camera is not otherwise synchronized: concurrent calls that talk to the
+// same device should be serialized by the caller.
 type Camera struct {
-	camera         *C.struct__ArvCamera
+	camera *C.struct__ArvCamera
+	// ThreadPriority selects the scheduling priority of the stream receiving
+	// thread. It is only read by CreateStream, so it has to be set before the
+	// stream is created; changing it afterwards has no effect on streams that
+	// already exist. There is no setter method — assign the field directly.
 	ThreadPriority ThreadPriorityType
 
 	// state is shared by every copy of this Camera. Nil for the zero value.
 	state *cameraState
 }
 
+// Acquisition modes accepted by SetAcquisitionMode. They mirror the
+// ArvAcquisitionMode enumeration.
 const (
-	ACQUISITION_MODE_CONTINUOUS   = C.ARV_ACQUISITION_MODE_CONTINUOUS
+	// ACQUISITION_MODE_CONTINUOUS keeps acquiring frames until acquisition is
+	// stopped.
+	ACQUISITION_MODE_CONTINUOUS = C.ARV_ACQUISITION_MODE_CONTINUOUS
+	// ACQUISITION_MODE_SINGLE_FRAME acquires a single frame per acquisition
+	// start.
 	ACQUISITION_MODE_SINGLE_FRAME = C.ARV_ACQUISITION_MODE_SINGLE_FRAME
 )
 
+// Auto modes for the camera's automatic feature control. They mirror the
+// ArvAuto enumeration and are accepted by SetExposureTimeAuto and SetGainAuto,
+// and returned by GetExposureTimeAuto.
 const (
-	AUTO_OFF        = C.ARV_AUTO_OFF
-	AUTO_ONCE       = C.ARV_AUTO_ONCE
+	// AUTO_OFF disables the automatic control; the feature keeps its manually
+	// set value.
+	AUTO_OFF = C.ARV_AUTO_OFF
+	// AUTO_ONCE runs the automatic control until it converges, then switches
+	// the feature back to manual.
+	AUTO_ONCE = C.ARV_AUTO_ONCE
+	// AUTO_CONTINUOUS keeps the automatic control running permanently.
 	AUTO_CONTINUOUS = C.ARV_AUTO_CONTINUOUS
 )
 
+// NewCamera opens the camera identified by name and returns a handle on it.
+// The name is matched by Aravis against device ids, vendor/model aliases and
+// serial numbers; an empty name selects the first available camera.
+//
+// The returned Camera must be released with Close. On error the returned
+// Camera is unusable — check it with IsNil, or check the error.
 func NewCamera(name string) (Camera, error) {
 	var cam Camera
 	var gerror *C.GError
@@ -135,6 +186,13 @@ func NewCamera(name string) (Camera, error) {
 	return cam, err
 }
 
+// CreateStream creates a new image stream for this camera. The stream's
+// receiving thread is set up according to the camera's ThreadPriority field,
+// which is read here and nowhere else.
+//
+// The returned Stream owns its underlying object and must be released with
+// Close. If the stream could not be created, the zero Stream is returned
+// together with the error.
 func (c *Camera) CreateStream() (Stream, error) {
 	var stream Stream
 	var gerror *C.GError
@@ -177,6 +235,19 @@ func (c *Camera) CreateStream() (Stream, error) {
 	return stream, err
 }
 
+// GetDevice returns the low-level Device the camera talks through, for feature
+// and register access that the Camera API does not expose.
+//
+// The returned Device only borrows the camera's device reference: it does not
+// own it, and the caller must not Close it. Its lifetime is that of the
+// Camera, so it must not be used after the Camera has been closed. This is the
+// opposite of OpenDevice, which hands ownership to the caller.
+//
+// The returned error is always nil; it exists for signature symmetry with the
+// rest of the API. It is not a success indicator: the underlying call can
+// return NULL and this method does not check, so a nil Device can come back
+// alongside that nil error. Test the result with Device.IsNil before calling
+// anything on it.
 func (c *Camera) GetDevice() (Device, error) {
 	var d Device
 	var err error
@@ -186,6 +257,7 @@ func (c *Camera) GetDevice() (Device, error) {
 	return d, err
 }
 
+// GetVendorName returns the camera's vendor name as reported by the device.
 func (c *Camera) GetVendorName() (string, error) {
 	var gerror *C.GError
 
@@ -198,6 +270,7 @@ func (c *Camera) GetVendorName() (string, error) {
 	return C.GoString(name), nil
 }
 
+// GetModelName returns the camera's model name as reported by the device.
 func (c *Camera) GetModelName() (string, error) {
 	var gerror *C.GError
 
@@ -210,6 +283,8 @@ func (c *Camera) GetModelName() (string, error) {
 	return C.GoString(name), nil
 }
 
+// GetDeviceId returns the camera's device id, the same identifier used for
+// device enumeration and accepted by NewCamera.
 func (c *Camera) GetDeviceId() (string, error) {
 	var gerror *C.GError
 	var err error
@@ -223,6 +298,8 @@ func (c *Camera) GetDeviceId() (string, error) {
 	return C.GoString(id), err
 }
 
+// GetDeviceSerialNumber returns the camera's serial number as reported by the
+// device.
 func (c *Camera) GetDeviceSerialNumber() (string, error) {
 	var gerror *C.GError
 	var err error
@@ -236,6 +313,9 @@ func (c *Camera) GetDeviceSerialNumber() (string, error) {
 	return C.GoString(serialNumber), err
 }
 
+// GetSensorSize returns the width and height of the camera's sensor in pixels.
+// This is the physical sensor size, independent of the currently configured
+// region of interest or binning.
 func (c *Camera) GetSensorSize() (int, int, error) {
 	var gerror *C.GError
 	var err error
@@ -254,6 +334,10 @@ func (c *Camera) GetSensorSize() (int, int, error) {
 	return int(width), int(height), err
 }
 
+// SetRegion sets the region of interest to the given offset and size, in
+// pixels. Aravis writes the OffsetX, OffsetY, Width and Height features; the
+// camera may clamp or round the values to what it supports, so read them back
+// with GetRegion if the exact geometry matters.
 func (c *Camera) SetRegion(x, y, width, height int) error {
 	var gerror *C.GError
 	var err error
@@ -272,6 +356,8 @@ func (c *Camera) SetRegion(x, y, width, height int) error {
 	return err
 }
 
+// GetRegion returns the current region of interest as x, y, width and height
+// in pixels.
 func (c *Camera) GetRegion() (int, int, int, int, error) {
 	var gerror *C.GError
 	var err error
@@ -292,6 +378,9 @@ func (c *Camera) GetRegion() (int, int, int, int, error) {
 	return int(x), int(y), int(width), int(height), err
 }
 
+// GetHeight returns the current image height in pixels. It reads the GenICam
+// "Height" integer feature directly rather than going through the region
+// accessors.
 func (c *Camera) GetHeight() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -310,6 +399,8 @@ func (c *Camera) GetHeight() (int, error) {
 	return int(val), err
 }
 
+// GetHeightBounds returns the minimum and maximum image height the camera
+// accepts, in pixels.
 func (c *Camera) GetHeightBounds() (int, int, error) {
 	var gerror *C.GError
 	var err error
@@ -328,6 +419,9 @@ func (c *Camera) GetHeightBounds() (int, int, error) {
 	return int(min), int(max), err
 }
 
+// GetWidth returns the current image width in pixels. It reads the GenICam
+// "Width" integer feature directly rather than going through the region
+// accessors.
 func (c *Camera) GetWidth() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -346,6 +440,8 @@ func (c *Camera) GetWidth() (int, error) {
 	return int(val), err
 }
 
+// GetWidthBounds returns the minimum and maximum image width the camera
+// accepts, in pixels.
 func (c *Camera) GetWidthBounds() (int, int, error) {
 	var gerror *C.GError
 	var err error
@@ -364,6 +460,9 @@ func (c *Camera) GetWidthBounds() (int, int, error) {
 	return int(minVal), int(maxVal), err
 }
 
+// SetBinning sets the horizontal and vertical binning factors, dx and dy. A
+// factor of 1 disables binning on that axis. Not every camera supports binning
+// or arbitrary factors; read the applied values back with GetBinning.
 func (c *Camera) SetBinning(dx, dy int) error {
 	var gerror *C.GError
 	var err error
@@ -395,6 +494,8 @@ func (c *Camera) GetBinning() (int, int, error) {
 	return int(dx), int(dy), err
 }
 
+// SetPixelFormat sets the pixel format from its numeric PFNC/GenICam code, as
+// returned by GetPixelFormat or GetAvailablePixelFormats.
 func (c *Camera) SetPixelFormat(format uint32) error {
 	var gerror *C.GError
 	var err error
@@ -407,6 +508,8 @@ func (c *Camera) SetPixelFormat(format uint32) error {
 	return err
 }
 
+// GetPixelFormat returns the current pixel format as its numeric PFNC/GenICam
+// code.
 func (c *Camera) GetPixelFormat() (uint32, error) {
 	var gerror *C.GError
 	var err error
@@ -419,6 +522,8 @@ func (c *Camera) GetPixelFormat() (uint32, error) {
 	return uint32(format), err
 }
 
+// GetPixelFormatAsString returns the current pixel format as its GenICam name,
+// for example "Mono8" or "BayerRG8".
 func (c *Camera) GetPixelFormatAsString() (string, error) {
 	var gerror *C.GError
 	var err error
@@ -433,6 +538,8 @@ func (c *Camera) GetPixelFormatAsString() (string, error) {
 	return C.GoString(format), err
 }
 
+// SetPixelFormatFromString sets the pixel format from its GenICam name, for
+// example "Mono8", as listed by GetAvailablePixelFormatsAsStrings.
 func (c *Camera) SetPixelFormatFromString(format string) error {
 	var gerror *C.GError
 	var err error
@@ -448,6 +555,10 @@ func (c *Camera) SetPixelFormatFromString(format string) error {
 	return err
 }
 
+// GetAvailablePixelFormats returns the numeric PFNC/GenICam codes of every
+// pixel format the camera supports. The C array Aravis allocates is freed
+// before returning, so the result is owned by the caller. It is nil when the
+// camera reports no formats.
 func (c *Camera) GetAvailablePixelFormats() ([]uint32, error) {
 	var gerror *C.GError
 	var err error
@@ -476,6 +587,11 @@ func (c *Camera) GetAvailablePixelFormats() ([]uint32, error) {
 	return result, err
 }
 
+// GetAvailablePixelFormatsAsDisplayNames returns the human readable names of
+// every pixel format the camera supports, in the same order as
+// GetAvailablePixelFormats. These names are meant for display and are not
+// accepted by SetPixelFormatFromString — use
+// GetAvailablePixelFormatsAsStrings for that.
 func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() ([]string, error) {
 	var gerror *C.GError
 	var err error
@@ -504,6 +620,9 @@ func (c *Camera) GetAvailablePixelFormatsAsDisplayNames() ([]string, error) {
 	return result, err
 }
 
+// GetAvailablePixelFormatsAsStrings returns the GenICam names of every pixel
+// format the camera supports, in the same order as GetAvailablePixelFormats.
+// These names are the ones SetPixelFormatFromString accepts.
 func (c *Camera) GetAvailablePixelFormatsAsStrings() ([]string, error) {
 	var gerror *C.GError
 	var err error
@@ -532,6 +651,8 @@ func (c *Camera) GetAvailablePixelFormatsAsStrings() ([]string, error) {
 	return result, err
 }
 
+// StartAcquisition starts image acquisition. Buffers should already be pushed
+// to the stream created with CreateStream before calling this.
 func (c *Camera) StartAcquisition() error {
 	var gerror *C.GError
 	var err error
@@ -544,6 +665,8 @@ func (c *Camera) StartAcquisition() error {
 	return err
 }
 
+// StopAcquisition stops image acquisition, letting the frame in flight
+// complete. Use AbortAcquisition to stop immediately.
 func (c *Camera) StopAcquisition() error {
 	var gerror *C.GError
 	var err error
@@ -556,6 +679,9 @@ func (c *Camera) StopAcquisition() error {
 	return err
 }
 
+// AbortAcquisition stops image acquisition immediately, without waiting for
+// the frame in flight to complete. Not every camera implements the
+// AcquisitionAbort command.
 func (c *Camera) AbortAcquisition() error {
 	var gerror *C.GError
 	var err error
@@ -568,6 +694,8 @@ func (c *Camera) AbortAcquisition() error {
 	return err
 }
 
+// SetAcquisitionMode sets the acquisition mode, which must be one of the
+// ACQUISITION_MODE_* constants.
 func (c *Camera) SetAcquisitionMode(mode int) error {
 	var gerror *C.GError
 	var err error
@@ -580,6 +708,9 @@ func (c *Camera) SetAcquisitionMode(mode int) error {
 	return err
 }
 
+// SetFrameRate sets the acquisition frame rate in frames per second. Aravis
+// also switches the camera to the free-running trigger configuration that the
+// frame rate feature requires.
 func (c *Camera) SetFrameRate(frameRate float64) error {
 	var gerror *C.GError
 	var err error
@@ -592,6 +723,8 @@ func (c *Camera) SetFrameRate(frameRate float64) error {
 	return err
 }
 
+// GetFrameRate returns the current acquisition frame rate in frames per
+// second.
 func (c *Camera) GetFrameRate() (float64, error) {
 	var gerror *C.GError
 	var err error
@@ -604,6 +737,8 @@ func (c *Camera) GetFrameRate() (float64, error) {
 	return float64(fr), err
 }
 
+// GetFrameRateBounds returns the minimum and maximum frame rate the camera
+// accepts, in frames per second, for the current configuration.
 func (c *Camera) GetFrameRateBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
@@ -621,14 +756,28 @@ func (c *Camera) GetFrameRateBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
+// SetLineRate forwards lineRate verbatim to SetFrameRate.
+//
+// It does not touch any AcquisitionLineRate feature: for a line-scan camera
+// this sets the frame rate, not the line rate, and the two are only the same
+// when the camera happens to expose one line per frame. Set the line rate
+// through the device's GenICam feature instead if you need it.
 func (c *Camera) SetLineRate(lineRate float64) error {
 	return c.SetFrameRate(lineRate)
 }
 
+// GetLineRate returns whatever GetFrameRate returns; it is a verbatim forward.
+//
+// It does not read any AcquisitionLineRate feature, so on a line-scan camera
+// the value is the frame rate, not the line rate. Read the line rate through
+// the device's GenICam feature instead if you need it.
 func (c *Camera) GetLineRate() (float64, error) {
 	return c.GetFrameRate()
 }
 
+// SetTrigger configures the camera for triggered acquisition on the given
+// trigger source, for example "Line1" or "Software". Aravis sets the frame
+// start trigger to On, selects the source, and disables the other triggers.
 func (c *Camera) SetTrigger(source string) error {
 	var gerror *C.GError
 	var err error
@@ -644,6 +793,9 @@ func (c *Camera) SetTrigger(source string) error {
 	return err
 }
 
+// SetTriggerSource sets only the trigger source of the currently selected
+// trigger, without changing the trigger mode. Use SetTrigger to enable
+// triggered acquisition in the first place.
 func (c *Camera) SetTriggerSource(source string) error {
 	var gerror *C.GError
 	var err error
@@ -659,6 +811,8 @@ func (c *Camera) SetTriggerSource(source string) error {
 	return err
 }
 
+// GetTriggerSource returns the trigger source of the currently selected
+// trigger.
 func (c *Camera) GetTriggerSource() (string, error) {
 	var gerror *C.GError
 	var err error
@@ -672,6 +826,9 @@ func (c *Camera) GetTriggerSource() (string, error) {
 	return C.GoString(csource), err
 }
 
+// SoftwareTrigger fires one software trigger by executing the TriggerSoftware
+// command. It only has an effect when the camera has been configured for
+// software triggering, for example with SetTrigger("Software").
 func (c *Camera) SoftwareTrigger() error {
 	var gerror *C.GError
 	var err error
@@ -685,6 +842,8 @@ func (c *Camera) SoftwareTrigger() error {
 	return err
 }
 
+// ClearTriggers disables every trigger of the camera, returning it to
+// free-running acquisition.
 func (c *Camera) ClearTriggers() error {
 	var gerror *C.GError
 	var err error
@@ -697,6 +856,8 @@ func (c *Camera) ClearTriggers() error {
 	return err
 }
 
+// IsExposureTimeAvailable reports whether the camera exposes a manual exposure
+// time feature.
 func (c *Camera) IsExposureTimeAvailable() (bool, error) {
 	var gerror *C.GError
 	var err error
@@ -709,6 +870,9 @@ func (c *Camera) IsExposureTimeAvailable() (bool, error) {
 	return toBool(gboolean), err
 }
 
+// IsExposureAutoAvailable reports whether the camera exposes an automatic
+// exposure feature, that is, whether SetExposureTimeAuto and
+// GetExposureTimeAuto can be used.
 func (c *Camera) IsExposureAutoAvailable() (bool, error) {
 	var gerror *C.GError
 	var err error
@@ -720,6 +884,9 @@ func (c *Camera) IsExposureAutoAvailable() (bool, error) {
 	return toBool(gboolean), err
 }
 
+// SetExposureTime sets the exposure time in microseconds. The value has to lie
+// within the bounds reported by GetExposureTimeBounds, and automatic exposure
+// has to be off (see SetExposureTimeAuto) for it to stick.
 func (c *Camera) SetExposureTime(time float64) error {
 	var gerror *C.GError
 	var err error
@@ -732,6 +899,7 @@ func (c *Camera) SetExposureTime(time float64) error {
 	return err
 }
 
+// GetExposureTime returns the current exposure time in microseconds.
 func (c *Camera) GetExposureTime() (float64, error) {
 	var gerror *C.GError
 	var err error
@@ -744,6 +912,8 @@ func (c *Camera) GetExposureTime() (float64, error) {
 	return float64(cdouble), err
 }
 
+// GetExposureTimeBounds returns the minimum and maximum exposure time the
+// camera accepts, in microseconds.
 func (c *Camera) GetExposureTimeBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
@@ -762,6 +932,8 @@ func (c *Camera) GetExposureTimeBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
+// SetExposureTimeAuto sets the automatic exposure mode, which must be one of
+// the AUTO_* constants.
 func (c *Camera) SetExposureTimeAuto(mode int) error {
 	var gerror *C.GError
 	var err error
@@ -774,6 +946,8 @@ func (c *Camera) SetExposureTimeAuto(mode int) error {
 	return err
 }
 
+// GetExposureTimeAuto returns the current automatic exposure mode as one of
+// the AUTO_* constants.
 func (c *Camera) GetExposureTimeAuto() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -786,6 +960,10 @@ func (c *Camera) GetExposureTimeAuto() (int, error) {
 	return int(mode), err
 }
 
+// SetGain sets the analog gain. The unit is camera specific — typically dB,
+// but some cameras use a raw device unit. The value has to lie within the
+// bounds reported by GetGainBounds, and automatic gain has to be off (see
+// SetGainAuto) for it to stick.
 func (c *Camera) SetGain(gain float64) error {
 	var gerror *C.GError
 	var err error
@@ -797,6 +975,7 @@ func (c *Camera) SetGain(gain float64) error {
 	return err
 }
 
+// GetGain returns the current analog gain, in the camera's gain unit.
 func (c *Camera) GetGain() (float64, error) {
 	var gerror *C.GError
 	var err error
@@ -809,6 +988,8 @@ func (c *Camera) GetGain() (float64, error) {
 	return float64(cgain), err
 }
 
+// GetGainBounds returns the minimum and maximum gain the camera accepts, in
+// the camera's gain unit.
 func (c *Camera) GetGainBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
@@ -827,6 +1008,8 @@ func (c *Camera) GetGainBounds() (float64, float64, error) {
 	return float64(minVal), float64(maxVal), err
 }
 
+// SetGainAuto sets the automatic gain mode, which must be one of the AUTO_*
+// constants.
 func (c *Camera) SetGainAuto(mode int) error {
 	var gerror *C.GError
 	var err error
@@ -839,6 +1022,10 @@ func (c *Camera) SetGainAuto(mode int) error {
 	return err
 }
 
+// GetPayloadSize returns the size in bytes of one image payload for the
+// current camera configuration. Buffers passed to the stream must be at least
+// this large, so it should be read after the region, binning and pixel format
+// have been set.
 func (c *Camera) GetPayloadSize() (uint, error) {
 	var gerror *C.GError
 	var err error
@@ -851,12 +1038,16 @@ func (c *Camera) GetPayloadSize() (uint, error) {
 	return uint(csize), err
 }
 
+// IsGVDevice reports whether the camera is a GigE Vision device, that is,
+// whether the GV* methods apply to it. The returned error is always nil.
 func (c *Camera) IsGVDevice() (bool, error) {
 	cbool := C.arv_camera_is_gv_device(c.camera)
 
 	return toBool(cbool), nil
 }
 
+// GVGetNumStreamChannels returns the number of stream channels the GigE Vision
+// camera provides. GigE Vision only.
 func (c *Camera) GVGetNumStreamChannels() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -869,6 +1060,9 @@ func (c *Camera) GVGetNumStreamChannels() (int, error) {
 	return int(cint), err
 }
 
+// GVSelectStreamChannels selects the stream channel the subsequent stream
+// related calls apply to. Valid ids range from 0 to
+// GVGetNumStreamChannels()-1. GigE Vision only.
 func (c *Camera) GVSelectStreamChannels(id int) error {
 	var gerror *C.GError
 	var err error
@@ -881,6 +1075,8 @@ func (c *Camera) GVSelectStreamChannels(id int) error {
 	return err
 }
 
+// GVGetCurrentStreamChannel returns the id of the currently selected stream
+// channel. GigE Vision only.
 func (c *Camera) GVGetCurrentStreamChannel() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -893,6 +1089,8 @@ func (c *Camera) GVGetCurrentStreamChannel() (int, error) {
 	return int(cint), err
 }
 
+// GVGetPacketDelay returns the inter-packet delay in nanoseconds. GigE Vision
+// only.
 func (c *Camera) GVGetPacketDelay() (int64, error) {
 	var gerror *C.GError
 	var err error
@@ -905,6 +1103,9 @@ func (c *Camera) GVGetPacketDelay() (int64, error) {
 	return int64(cint64), err
 }
 
+// GVSetPacketDelay sets the delay between two stream packets, in nanoseconds.
+// Raising it throttles the camera and helps against packet loss when the host
+// or the network cannot keep up. GigE Vision only.
 func (c *Camera) GVSetPacketDelay(delay int64) error {
 	var gerror *C.GError
 	var err error
@@ -916,6 +1117,7 @@ func (c *Camera) GVSetPacketDelay(delay int64) error {
 	return err
 }
 
+// GVGetPacketSize returns the stream packet size in bytes. GigE Vision only.
 func (c *Camera) GVGetPacketSize() (int, error) {
 	var gerror *C.GError
 	var err error
@@ -928,6 +1130,10 @@ func (c *Camera) GVGetPacketSize() (int, error) {
 	return int(csize), err
 }
 
+// GVSetPacketSize sets the stream packet size in bytes. It must not exceed
+// what every hop between camera and host can carry: packets larger than 1500
+// bytes require jumbo frames (MTU 9000) on the network interface. GigE Vision
+// only.
 func (c *Camera) GVSetPacketSize(size int) error {
 	var gerror *C.GError
 	var err error
@@ -940,6 +1146,11 @@ func (c *Camera) GVSetPacketSize(size int) error {
 	return err
 }
 
+// GetChunkMode reports whether chunk data is enabled, that is, whether the
+// camera appends metadata chunks to the image buffers. Buffer.HasChunks then
+// reports whether a given frame actually carries them. Neither the chunk
+// contents nor their layout is exposed — this package wraps no chunk decoder,
+// so reading the values back requires going through the device directly.
 func (c *Camera) GetChunkMode() (bool, error) {
 	var gerror *C.GError
 	var err error
@@ -1061,6 +1272,9 @@ func (c *Camera) clearControlLostHandler() {
 	c.state.controlLostID = 0
 }
 
+// IsNil reports whether the Camera holds no underlying camera at all — the
+// zero value, or the value returned by a failed NewCamera. It says nothing
+// about whether the camera has been closed; use IsClosed for that.
 func (c *Camera) IsNil() bool {
 	return c.camera == nil
 }

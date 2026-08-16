@@ -1,39 +1,53 @@
 # go-aravis
 
-**A comprehensive Go wrapper around libaravis 0.8+ for GigE Vision and USB3 Vision camera control**
+**A comprehensive Go wrapper around libaravis 0.8.25+ for GigE Vision and USB3 Vision camera control**
 
 This library provides Go bindings for the Aravis library, enabling high-performance machine vision applications with support for GigE Vision and USB3 Vision cameras. Built with CGO for optimal performance and direct access to advanced camera features.
 
+```bash
+go get github.com/MeKo-Christian/go-aravis
+```
+
 If you need libaravis 0.6 support, go to the original package at https://github.com/thinkski/go-aravis
+
+> **This is a fork.** See [Provenance](#-provenance) for how it relates to the upstream
+> projects, and [CHANGELOG.md](CHANGELOG.md) for what it changed.
 
 ## 🚀 Features
 
 ### Core Camera Control
 
-- **Device Discovery**: Automatic detection and enumeration of connected cameras
-- **Camera Management**: Complete camera lifecycle management with proper resource cleanup
-- **Image Acquisition**: High-performance streaming with customizable buffer management
-- **Parameter Control**: Full access to camera parameters (exposure, gain, frame rate, triggers)
-- **Region of Interest**: Precise control over capture area and sensor configuration
+- **Device Discovery**: Detection and enumeration of connected cameras
+- **Camera Management**: Camera lifecycle management with explicit resource cleanup
+- **Image Acquisition**: Streaming with caller-managed buffer queues
+- **Parameter Control**: Exposure, gain, frame rate and trigger configuration, plus
+  generic GenICam feature access through `Device`
+- **Region of Interest**: Control over capture area, binning and sensor configuration
 
 ### Advanced Capabilities
 
 - **Thread Priority Control**: Real-time, high-priority, and normal priority streaming modes
 - **GigE Vision Optimization**: Packet size and delay control for network performance
 - **Serial Number Access**: Device identification and inventory management
-- **Multipart Buffer Support**: Advanced cameras with multi-tap and multi-spectral imaging
-- **Chunk Data Processing**: Metadata extraction for advanced analysis
+- **Multipart Buffer Support**: Per-part data, geometry and component metadata for
+  multi-tap and multi-spectral cameras
+- **Chunk Data Detection**: `Buffer.HasChunks` and `Camera.GetChunkMode` report whether
+  a frame carries chunk metadata. Decoding the chunks themselves is not yet wrapped.
 - **Register/Memory Access**: Low-level hardware control for advanced users
 
 ### Image Processing
 
-- **Bayer Pattern Debayering**: Built-in support for raw sensor data processing
-- **Multiple Pixel Formats**: Support for various camera output formats
-- **Buffer Status Monitoring**: Comprehensive error detection and recovery
+- **Bayer Pattern Debayering**: `BayerRG` exposes a raw RGGB frame as an `image.Image`
+  using nearest-neighbor demosaicing. Other Bayer phases are not implemented.
+- **Pixel Format Control**: Read and set the pixel format, and enumerate the formats a
+  camera advertises, as numeric IDs, GenICam strings, or display names. The package
+  exports no pixel-format constants — supply the raw `uint32` or string.
+- **Buffer Status Reporting**: `Buffer.GetStatus` returns the acquisition status
+  (success, timeout, missing packets, …) so callers can detect bad frames.
 
 ### Developer Experience
 
-- **Modern Go Support**: Built for Go 1.21+ with modern development practices
+- **Modern Go Support**: Built for Go 1.23+ with modern development practices
 - **Comprehensive Examples**: Production-ready code samples for all features
 - **Docker Support**: Containerized development environment included
 - **Professional Build System**: Modern Makefile with colored output and CI/CD support
@@ -42,8 +56,11 @@ If you need libaravis 0.6 support, go to the original package at https://github.
 
 ### System Dependencies
 
-- **libaravis 0.8+**: Core Aravis library with development headers
-- **Go 1.21+**: Modern Go compiler with CGO support
+- **libaravis 0.8.25+**: Core Aravis library with development headers. The floor is
+  0.8.25 rather than 0.8 because `Buffer.FindComponent` wraps
+  `arv_buffer_find_component`, added in that release; against an older 0.8 the package
+  fails to compile.
+- **Go 1.23+**: Matches the `go` directive in `go.mod`; CGO must be enabled
 - **pkg-config**: For library linking configuration
 
 ### Network Configuration (GigE Vision)
@@ -54,9 +71,11 @@ If you need libaravis 0.6 support, go to the original package at https://github.
 ### Ubuntu/Debian Installation
 
 ```bash
-# Install Aravis library
+# Install Aravis library.
+# The dev package was renamed on Ubuntu 24.04: it is `libaravis-dev` there and
+# `libaravis-0.8-dev` on older releases. Both still ship Aravis 0.8.
 sudo apt update
-sudo apt install libaravis-0.8-dev pkg-config
+sudo apt install libaravis-dev pkg-config
 
 # Configure network interface for GigE cameras (replace enp2s0 with your interface)
 sudo ip link set enp2s0 mtu 9000
@@ -82,7 +101,7 @@ import (
     "fmt"
     "log"
 
-    aravis "github.com/hybridgroup/go-aravis"
+    aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 func main() {
@@ -119,7 +138,7 @@ import (
     "log"
     "time"
 
-    aravis "github.com/hybridgroup/go-aravis"
+    aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 func main() {
@@ -148,8 +167,9 @@ func main() {
     camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS)
     camera.SetFrameRate(30.0)  // 30 FPS
 
-    // Create stream with high priority for real-time performance
-    camera.SetThreadPriority(aravis.ThreadPriorityHigh)
+    // Create stream with high priority for real-time performance.
+    // ThreadPriority is a struct field, read by CreateStream — set it first.
+    camera.ThreadPriority = aravis.ThreadPriorityHigh
     stream, err := camera.CreateStream()
     if err != nil {
         log.Fatal(err)
@@ -178,20 +198,26 @@ func main() {
     frameCount := 0
     for frameCount < 100 {  // Capture 100 frames
         buffer, err := stream.TimeoutPopBuffer(time.Second)
-        if err != nil {
+
+        // A popped buffer belongs to us, and a non-nil buffer can come back
+        // together with a non-nil error — so decide on IsNil, not on err.
+        // Skipping the push back would drain the queue and stall acquisition.
+        if buffer.IsNil() {
             log.Printf("Frame timeout: %v", err)
             continue
         }
 
-        // Check frame quality
-        status, _ := buffer.GetStatus()
-        if status == aravis.BUFFER_STATUS_SUCCESS {
-            data, _ := buffer.GetData()
-            fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
-            frameCount++
+        if err == nil {
+            // Check frame quality
+            status, _ := buffer.GetStatus()
+            if status == aravis.BUFFER_STATUS_SUCCESS {
+                data, _ := buffer.GetData()
+                fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
+                frameCount++
 
-            // Process your image data here
-            // ...
+                // Process your image data here
+                // ...
+            }
         }
 
         // Return buffer to stream
@@ -249,12 +275,12 @@ All examples are automatically built to the `bin/` directory:
 ```bash
 make examples
 ls bin/
-# Output: list_devices device_info get_image advanced_buffer register_access
+# Output: advanced_buffer device_info get_image list_devices performance_demo register_access
 ```
 
 ### Example Directory Structure
 
-Each example is now organized in its own directory for better modularity:
+Each example lives in its own directory:
 
 ```text
 examples/
@@ -280,8 +306,6 @@ make list-examples
 ```
 
 ## 📚 Comprehensive Examples
-
-Each example is now organized in its own directory with a `main.go` file for better project structure:
 
 ### 1. Device Information (`examples/device_info/main.go`)
 
@@ -338,11 +362,15 @@ Demonstrates high-performance optimizations for streaming applications:
 
 Optimize streaming performance for real-time applications:
 
+`ThreadPriority` is a field on `Camera`, not a setter method. `CreateStream` reads it,
+so assign it before creating the stream:
+
 ```go
-// Configure thread priority before creating stream
-camera.SetThreadPriority(aravis.ThreadPriorityRealtime)  // Requires privileges
-camera.SetThreadPriority(aravis.ThreadPriorityHigh)      // Recommended
-camera.SetThreadPriority(aravis.ThreadPriorityNormal)    // Default
+camera.ThreadPriority = aravis.ThreadPriorityRealtime // Requires privileges
+camera.ThreadPriority = aravis.ThreadPriorityHigh     // Recommended
+camera.ThreadPriority = aravis.ThreadPriorityNormal   // Default
+
+stream, err := camera.CreateStream()
 ```
 
 ### Multipart Buffer Processing
@@ -352,6 +380,9 @@ Handle advanced cameras with multiple image sensors:
 ```go
 // Check for multipart data
 numParts, err := buffer.GetNumParts()
+if err != nil {
+    return err
+}
 if numParts > 1 {
     for i := 0; i < numParts; i++ {
         partData, _ := buffer.GetPartData(i)
@@ -360,7 +391,8 @@ if numParts > 1 {
         componentId, _ := buffer.GetPartComponentId(i)
 
         // Process each image part separately
-        fmt.Printf("Part %d: %dx%d, Component: %d\n", i, width, height, componentId)
+        fmt.Printf("Part %d: %dx%d, component %d, %d bytes\n",
+            i, width, height, componentId, len(partData))
     }
 }
 ```
@@ -372,15 +404,17 @@ Maximize network performance:
 ```go
 // Check if camera supports GigE Vision
 if isGV, _ := camera.IsGVDevice(); isGV {
-    // Optimize packet size for your network
-    camera.SetGVPacketSize(9000)
+    // Optimize packet size for your network (requires MTU 9000 end to end)
+    camera.GVSetPacketSize(9000)
 
-    // Adjust packet delay if needed
-    camera.SetGVPacketDelay(1000)
+    // Adjust inter-packet delay if the host drops packets
+    camera.GVSetPacketDelay(1000)
 
-    // Get network statistics
+    // Estimate the stream bandwidth
+    payloadSize, _ := camera.GetPayloadSize()
+    frameRate, _ := camera.GetFrameRate()
     fmt.Printf("Stream bandwidth: %.2f MB/s\n",
-        float64(payloadSize) * frameRate / 1024 / 1024)
+        float64(payloadSize)*frameRate/1024/1024)
 }
 ```
 
@@ -404,45 +438,57 @@ memData, _ := device.ReadMemory(0x0000, 64)
 
 ### High-Performance Optimizations
 
-For maximum performance in streaming applications, go-aravis now includes several optimizations:
+For streaming applications, the package offers a few lower-overhead paths alongside the
+straightforward API.
 
 #### Fast Parameter Access
 
-Use cached string methods to eliminate C string allocations:
+The `*Fast` variants reuse interned C strings for the feature name instead of allocating
+one per call. This only applies to the feature names in the package's internal table; it
+changes allocation behavior, not the cost of the underlying device round-trip, which
+dominates on real hardware.
+
 ```go
-// Standard method (allocates C strings)
+// Standard method: allocates a C string for the feature name on every call
 width, err := camera.GetWidth()
 
-// Fast method (uses cached strings) - 40% faster
-width, err := camera.GetWidthFast()
-height, err := camera.GetHeightFast() 
+// Fast method: reuses an interned feature-name string
+width, err = camera.GetWidthFast()
+height, err := camera.GetHeightFast()
 exposure, err := camera.GetExposureTimeFast()
 ```
 
 #### Zero-Copy Buffer Access
 
-Avoid memory copies for maximum streaming performance:
+Three ways to get at pixel data, trading safety for copies:
 
 ```go
-// Standard method (copies entire buffer)
+// Copies the frame into a freshly allocated slice
 data, err := buffer.GetData()
 
-// Zero-copy method (direct memory access) - 50x faster
+// Aliases the C buffer with no copy at all. The returned slice is only valid
+// until the buffer is handed back with stream.PushBuffer.
 dataSlice, err := buffer.GetDataSlice()
 
-// Pre-allocated copy method (no allocations) - 5x faster  
-dataBuffer := make([]byte, payloadSize) // Pre-allocate once
+// Copies into a caller-owned slice, allocating nothing. The copy survives
+// PushBuffer, but reusing one destination means each frame overwrites the last.
+payloadSize, _ := camera.GetPayloadSize()
+dataBuffer := make([]byte, payloadSize) // Pre-allocate once, reuse every frame
 bytesRead, err := buffer.GetDataInto(dataBuffer)
 ```
 
-#### Performance Impact
+#### What is actually measured
 
-- **Parameter access**: 40% faster with cached strings
-- **Buffer operations**: 50-80% faster with zero-copy methods  
-- **Streaming performance**: Up to 50% CPU reduction
-- **Memory usage**: 100% elimination of allocations in streaming loops
+`GetDataInto` performs zero allocations. That is the one claim here backed by a test:
+`TestGetDataIntoZeroAllocations` in `tests/buffer_data_test.go` asserts it with
+`testing.AllocsPerRun`, and it runs in CI against Aravis's Fake camera backend.
 
-See `PERFORMANCE.md` for detailed optimization guide and `examples/performance_demo/` for working examples.
+No end-to-end throughput or CPU figures are published for this library. The benchmarks in
+`tests/` skip without camera hardware, so any such number would not be reproducible from
+this repository. Measure on your own camera and network before sizing a system.
+
+See `PERFORMANCE.md` for the optimization guide and `examples/performance_demo/` for
+working examples.
 
 ## 🐳 Docker Development
 
@@ -459,7 +505,9 @@ make docker-run
 docker run -it --rm go-aravis:latest bash
 ```
 
-The container includes all necessary dependencies and is based on Debian with Go 1.21.
+The container is based on `golang:1.23-bookworm`, installs `libaravis-dev`, and builds
+the `list_devices` example to `/usr/local/bin/listdevices`, which is what `make docker-run`
+executes.
 
 ## 🔧 Troubleshooting
 
@@ -477,8 +525,8 @@ sudo ip link set enp2s0 mtu 9000
 # Make permanent (Ubuntu/Debian)
 echo 'enp2s0 mtu 9000' | sudo tee -a /etc/network/interfaces
 
-# Verify with camera
-make run-example EXAMPLE=check-system
+# Verify the toolchain and Aravis installation
+make check-system
 ```
 
 **Firewall Configuration**: Ensure GigE Vision ports are open:
@@ -496,15 +544,22 @@ ping <camera-ip>
 
 **Buffer Management**: Optimize for your use case:
 
+The number of buffers you push before starting acquisition trades latency against
+tolerance for scheduling jitter:
+
 ```go
-// For high frame rates, use more buffers
-bufferCount := 10  // Increase for higher frame rates
+payloadSize, _ := camera.GetPayloadSize()
 
-// For low latency, use fewer buffers
-bufferCount := 2   // Minimize for real-time applications
+bufferCount := 10 // High frame rates: more buffers absorb scheduling jitter
+// bufferCount := 2 // Low latency: fewer buffers keep frames fresh
 
-// For batch processing, use large buffers
-payloadSize *= 2   // Handle larger images efficiently
+for i := 0; i < bufferCount; i++ {
+    buffer, err := aravis.NewBuffer(payloadSize)
+    if err != nil {
+        return err
+    }
+    stream.PushBuffer(buffer)
+}
 ```
 
 **Thread Priorities**: Requires system configuration:
@@ -628,32 +683,49 @@ For detailed testing information, see `tests/README.md`.
 
 ### Core Functions
 
+The authoritative reference is the godoc for the package itself; this is an orientation
+map. Run `go doc github.com/MeKo-Christian/go-aravis` for the full surface.
+
 **Device Management**:
 
-- `UpdateDeviceList()` - Refresh connected device list
+- `UpdateDeviceList()` - Refresh connected device list; call before enumerating
 - `GetNumDevices()` - Get count of available devices
 - `GetDeviceId(index)` - Get device identifier by index
-- `NewCamera(deviceId)` - Create camera instance
+- `GetNumInterface() / GetInterfaceId(index)` - Enumerate transport interfaces
+- `EnableInterface(id) / DisableInterface(id)` - Restrict which backends are used
+- `NewCamera(deviceId)` - Create camera instance; an empty id selects the first device
+- `OpenDevice(id)` - Open a device without a camera. The caller owns the result and
+  must `Close` it, unlike the borrowed device from `Camera.GetDevice`.
+- `Shutdown()` - Release Aravis's global state
 
 **Camera Control**:
 
-- `StartAcquisition() / StopAcquisition()` - Control image capture
+- `StartAcquisition() / StopAcquisition() / AbortAcquisition()` - Control image capture
 - `SetAcquisitionMode(mode)` - Configure capture mode
 - `SetFrameRate(fps)` - Set acquisition frame rate
-- `SetExposureTime(microseconds)` - Control exposure
+- `SetExposureTime(t)` - Control exposure, in the unit the camera's `ExposureTime`
+  feature uses (microseconds on essentially all devices; the package does not convert)
 - `SetGain(value)` - Adjust sensor gain
+- `SetRegion() / GetRegion() / SetBinning() / GetBinning()` - Sensor geometry
+- `SetPixelFormat() / GetAvailablePixelFormats()` - Pixel format selection
+- `Close() / IsClosed()` - Release the camera; idempotent
+- `SetControlLostHandler(fn)` - Register a per-camera control-lost callback
 
 **Stream Management**:
 
-- `CreateStream()` - Create image data stream
-- `PushBuffer(buffer) / PopBuffer()` - Buffer queue management
-- `TimeoutPopBuffer(timeout)` - Non-blocking buffer retrieval
+- `CreateStream()` - Create image data stream, using `Camera.ThreadPriority`
+- `PushBuffer(buffer)` - Return a buffer to the acquisition queue
+- `PopBuffer()` - Blocks indefinitely until a frame is available
+- `TimeoutPopBuffer(timeout)` - Blocks until a frame arrives or the timeout expires
+- `TryPopBuffer()` - The non-blocking variant; returns immediately if no frame is ready
 
 **Advanced Features**:
 
 - `GetDeviceSerialNumber()` - Device identification
 - `GetNumParts() / GetPartData(index)` - Multipart image support
-- `HasChunks()` - Metadata detection
+- `GetPartWidth/Height/X/Y(index)` - Per-part geometry
+- `GetPartComponentId/DataType/PixelFormat(index)`, `FindComponent(id)` - Part metadata
+- `HasChunks()` - Reports whether the frame carries chunk metadata
 - `ReadRegister() / WriteRegister()` - Hardware-level access
 
 ### Constants and Enums
@@ -710,12 +782,41 @@ This project maintains high code quality standards:
 The project includes comprehensive CI/CD workflows:
 
 - **Automated Testing**: Every commit runs unit tests, integration tests, and benchmarks
-- **Multi-Version Support**: Tests run on Go 1.21 and 1.22
+- **Single Go Version**: All jobs use the Go version in `go.mod` (1.23), pinned via the
+  `GO_VERSION` variable in the workflow
 - **Coverage Reporting**: Automatic coverage tracking and reporting
-- **Security Scanning**: Automated security vulnerability detection
-- **Cross-Platform**: Build verification across different platforms
+- **Security Scanning**: `gosec` runs on every commit and uploads SARIF results
+- **Build Verification**: A `linux/amd64` build job. There is no cross-platform or arm64
+  matrix — a real arm64 build needs a cross-compiled Aravis, not just `GOARCH`.
 
 All tests are designed to work **without requiring camera hardware**, making them CI/CD friendly. See `.github/workflows/` for implementation details.
+
+## 🧬 Provenance
+
+Three parties appear in this repository's history, which is worth spelling out because the
+LICENSE, the old module path, and the repository owner are all different names:
+
+| Role | Who |
+| --- | --- |
+| Original author, copyright holder | Chris Hiszpanski ([thinkski/go-aravis](https://github.com/thinkski/go-aravis)), for libaravis 0.6 |
+| Upstream fork, Aravis 0.8 port | The Hybrid Group ([hybridgroup/go-aravis](https://github.com/hybridgroup/go-aravis)), 2019–2022 |
+| This fork | [MeKo-Christian/go-aravis](https://github.com/MeKo-Christian/go-aravis) |
+
+Both prior copyrights are retained in [LICENSE](LICENSE); this fork adds no new copyright
+claim and stays BSD 3-Clause.
+
+The module path is `github.com/MeKo-Christian/go-aravis`. It was previously
+`github.com/hybridgroup/go-aravis`, which did not match the repository and so could not be
+resolved by `go get`. If you are migrating from the upstream module, update your imports:
+
+```bash
+go mod edit -replace github.com/hybridgroup/go-aravis=github.com/MeKo-Christian/go-aravis@latest
+```
+
+or simply change the import path — the package name (`aravis`) is unchanged.
+
+See [CHANGELOG.md](CHANGELOG.md) for what this fork changed relative to upstream, including
+the breaking changes.
 
 ## 📄 License
 

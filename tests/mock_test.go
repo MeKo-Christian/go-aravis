@@ -3,7 +3,7 @@ package tests
 import (
 	"testing"
 
-	aravis "github.com/hybridgroup/go-aravis"
+	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
 // TestMockOperations tests operations that should work without real cameras.

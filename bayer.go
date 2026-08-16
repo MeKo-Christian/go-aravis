@@ -5,6 +5,21 @@ import (
 	"image/color"
 )
 
+// BayerRG is an image.Image view over a raw, single-plane Bayer frame in RGGB
+// order: the sample at an even column and even row is red, the two mixed-parity
+// sites are green, and the odd/odd site is blue. Pix holds one 8-bit sensor
+// sample per pixel; the RGBA values handed out by At are reconstructed on the
+// fly by simple nearest-neighbor debayering, so no separate RGB copy is kept.
+//
+// Missing color channels are taken from the nearest neighboring site of the
+// required color, and neighbors that fall outside Rect are mirrored back across
+// the edge rather than clamped, which keeps them on the correct CFA phase.
+//
+// Caveat: At derives the CFA phase from the absolute coordinates (x&1, y&1)
+// while sample indexes Pix relative to Rect.Min. The two therefore agree only
+// when Rect.Min.X and Rect.Min.Y are both even; for a rect with an odd origin
+// the documented RGGB phase does not hold and the reconstructed colors are
+// shifted by one site.
 type BayerRG struct {
 	// Pix holds the image's pixels, in bayer order. The pixel at
 	// (x, y) starts at Pix[(y-Rect.Min.Y)*Stride + (x-Rect.Min.X)].
@@ -15,6 +30,13 @@ type BayerRG struct {
 	Rect image.Rectangle
 }
 
+// NewBayerRG returns a new BayerRG with bounds r and a zeroed Pix buffer of
+// r.Dx()*r.Dy() bytes, one byte per sensor sample, with Stride set to r.Dx().
+// Callers typically overwrite Pix with the raw frame data from the camera.
+//
+// Because At interprets the CFA phase from absolute coordinates, pass a
+// rectangle whose origin is even (for example image.Rect(0, 0, w, h)) if the
+// data is to be read as RGGB.
 func NewBayerRG(r image.Rectangle) *BayerRG {
 	w, h := r.Dx(), r.Dy()
 	pix := make([]uint8, w*h)
@@ -22,8 +44,11 @@ func NewBayerRG(r image.Rectangle) *BayerRG {
 	return &BayerRG{pix, w, r}
 }
 
+// ColorModel returns color.RGBAModel, the model of the debayered pixels
+// produced by At. It does not describe the raw single-channel data in Pix.
 func (p *BayerRG) ColorModel() color.Model { return color.RGBAModel }
 
+// Bounds returns the image's bounds, Rect.
 func (p *BayerRG) Bounds() image.Rectangle { return p.Rect }
 
 // sample returns the raw sensor value at (x, y). Coordinates outside the image
