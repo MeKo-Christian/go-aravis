@@ -135,16 +135,15 @@
 //	}
 //
 // Not every error is one of those, so errors.As is not guaranteed to match and a
-// caller must handle the plain-error case too. Two other kinds reach callers today:
+// caller must handle the plain-error case too. One other kind reaches callers today:
 //
 //   - The pop methods report an empty result as a plain error, so a timeout is not
-//     distinguishable from a real failure.
-//   - Many wrappers use cgo's two-result call form, whose second value is errno. errno
-//     is not cleared by a successful call, so these can surface a non-nil plain error
-//     even when nothing failed. This is a known defect, tracked as P6 in PLAN.md.
+//     distinguishable from a real failure. This is a known defect, tracked as P6 in
+//     PLAN.md.
 //
-// Not every call reports GenICam failures at all. The generic feature getters on
-// [Device] notably do not; their documentation says so individually.
+// Only a GError decides that a call failed. Some accessors wrap C functions that have
+// no GError out-parameter at all, so their error return is always nil; each one says so
+// in its own documentation, and the returned value is the whole contract.
 //
 // # Concurrency
 //

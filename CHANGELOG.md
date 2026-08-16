@@ -37,7 +37,9 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
 - **`Reset()` removed** from the error type. It existed only to serve the deleted error
   pool and had no callers.
 - **Device setters now return `error`.** `SetStringFeatureValue`, `SetIntegerFeatureValue`,
-  `SetFloatFeatureValue` and `SetNodeFeatureValue` previously discarded failures.
+  `SetFloatFeatureValue` and `SetNodeFeatureValue` previously discarded failures. The
+  matching getters kept their signatures but changed behaviour — see *The generic
+  `Device` feature getters swallowed every GenICam error* under **Fixed**.
 
 ### Added
 
@@ -65,6 +67,28 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
 
 ### Fixed
 
+- **`errno` was being reported as an error.** Many wrappers used cgo's two-result call
+  form (`v, err := C.arv_...`), whose second value is `errno`. `errno` is a syscall side
+  effect, not a failure report: any syscall the C function makes internally and that
+  fails benignly — a `recvfrom` returning `EAGAIN` on a GigE Vision socket, a `stat` of a
+  file that is not there — left the wrapper reporting a failure that never happened.
+  Only a `GError` decides failure now. Sixteen accessors
+  wrap C functions with no `GError` out-parameter at all — the `interface.go` id and
+  count accessors, eight `Buffer` accessors and the three `Stream` pop methods — and
+  their error return is now documented as always nil. The seven `*Fast` getters no
+  longer leak `errno` on their success path. Worst case was `NewBuffer`, where
+  `if err != nil || buffer == nil` both reported a failure that had not happened *and*
+  dropped the successfully allocated `ArvBuffer` on the floor, leaking it; it now keys
+  off the NULL check alone and returns a real error when Aravis hands back NULL, which
+  it previously reported as success.
+- **The generic `Device` feature getters swallowed every GenICam error.**
+  `GetStringFeatureValue`, `GetIntegerFeatureValue` and `GetFloatFeatureValue` passed
+  `nil` for the `GError` out-parameter, so a missing feature or a wrong-typed read
+  returned the zero value with a nil error. They now bind a real `GError` exactly as
+  the setters do (see *Device setters now return `error`* under **Breaking** — this is
+  the read-side counterpart), and report an `*AravisError` carrying, for example,
+  `DEVICE_ERROR_FEATURE_NOT_FOUND`. Code that treated a nil error as "the feature
+  exists" will start seeing the failures it was missing.
 - **32/64-bit out-param corruption.** `GetSensorSize`, `GetRegion`, `GetHeightBounds`,
   `GetWidthBounds` and `GetBinning` passed a pointer to a 64-bit Go `int` where Aravis
   writes 4 bytes, leaving half the value undefined. The same bug affected the `size`
