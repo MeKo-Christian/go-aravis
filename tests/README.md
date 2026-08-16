@@ -70,6 +70,7 @@ in isolation.
 | `camera_test.go` | camera identity, geometry, parameter round-trips, `*Fast` accessors, stream creation |
 | `buffer_test.go` | the fresh-buffer contract and the filled-buffer accessors, including multipart |
 | `buffer_data_test.go` | `GetDataInto` clamping, overrun, empty dest, and its zero-allocation guarantee |
+| `device_guard_test.go` | the `Device` guards: the GigE-only control calls against a non-GigE device, the zero-size `ReadMemory`, the nil receiver, and `Camera.GetDevice`/`IsGVDevice` |
 | `lifecycle_test.go` | `Close` idempotence across copies, owned vs borrowed devices, control-lost handlers under `-race` |
 | `integration_test.go` | the full acquisition workflow and sustained streaming |
 | `performance_test.go` | benchmarks |

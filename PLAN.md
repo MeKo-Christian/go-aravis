@@ -363,22 +363,39 @@ behavior is wrong. Ordered by severity.
       `if err != nil || buffer == nil` reports failure *and* drops the successfully
       allocated `ArvBuffer` on the floor, leaking it — it should key off `buffer == nil`
       alone.
-- [ ] **`Device.ReadMemory(addr, 0)` panics.** It does `make([]byte, size)` then takes
+- [x] **`Device.ReadMemory(addr, 0)` panics.** It does `make([]byte, size)` then takes
       `&buffer[0]`, which is out of range for a zero size. `WriteMemory` has the
       equivalent guard; `ReadMemory` does not.
+      **Fixed.** A zero size now returns an error rather than an empty slice, so the two
+      memory calls agree: a zero-length transfer is a caller mistake, not a request worth
+      forwarding. The doc comment, which described the panic as the contract, says so.
 - [ ] **The generic `Device` getters swallow every GenICam error.**
       `GetStringFeatureValue`, `GetIntegerFeatureValue` and `GetFloatFeatureValue` pass
       `nil` for the `GError` out-param, so a failure returns the zero value with no
       error — and the error they *do* return is the `errno` above. This is the read-side
       counterpart of the P0 fix to the setters.
-- [ ] **`TakeControl`/`LeaveControl` cast unconditionally via `ARV_GV_DEVICE()`** with no
+- [x] **`TakeControl`/`LeaveControl` cast unconditionally via `ARV_GV_DEVICE()`** with no
       `ARV_IS_GV_DEVICE` check, so calling either on a USB3 Vision device trips a GLib
       critical and passes a bad pointer.
-- [ ] **`Camera.GetDevice` and `Camera.IsGVDevice` always return a nil error**, and
+      **Fixed.** It was worse than a critical: GLib compiles its cast checks out under
+      `__OPTIMIZE__`, and cgo builds with `-O2`, so the macro was a plain pointer cast and
+      the call segfaulted — which is exactly what the new test observed against Aravis's
+      own Fake device before the fix. Both C helpers now check the type themselves and
+      `g_set_error` with `ARV_DEVICE_ERROR_WRONG_FEATURE`, chosen because it is not in the
+      `errorMessages` table, so the message "device is not a GigE Vision device" reaches
+      the caller instead of being rewritten to `ARV_DEVICE_ERROR_NOT_FOUND`'s misleading
+      "device not found".
+- [x] **`Camera.GetDevice` and `Camera.IsGVDevice` always return a nil error**, and
       `GetDevice` never checks `arv_camera_get_device` for NULL, so a caller can receive
       a `Device` wrapping a nil pointer with no indication anything failed. No method on
       `Device` except `Close`/`IsClosed` nil-guards its receiver, so that NULL then
       reaches Aravis.
+      **Fixed.** Both methods now guard the camera and check the result, returning the
+      house `errors.New` messages the rest of the package uses — no sentinels, which are
+      the separate error-contract item. Every `Device` method that dereferences the
+      underlying pointer calls a shared `check()` first, so the fourteen that used to hand
+      Aravis a NULL and collect an `ARV_IS_DEVICE` assertion now return an error. A
+      positive control against Fake keeps the guards from passing by rejecting everything.
 - [ ] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
       both as a freshly allocated `errors.New("aravis returned a null pointer")`, which
       is non-comparable, so callers cannot use `errors.Is` to detect a dropped frame.
