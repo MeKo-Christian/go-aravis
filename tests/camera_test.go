@@ -330,3 +330,128 @@ func TestCameraStreamCreation(t *testing.T) {
 		t.Error("CreateStream() with ThreadPriorityHigh returned a nil stream")
 	}
 }
+
+// The Fake camera's fixed bounds, read from its GenICam description. Like the
+// identity constants above, these are properties of the backend.
+const (
+	fakeFrameRateMin = 0.1
+	fakeFrameRateMax = 1000.0
+
+	fakeGainMin = 0.0
+	fakeGainMax = 10.0
+
+	fakeExposureTimeMin = 10.0
+	fakeExposureTimeMax = 10000000.0
+)
+
+// TestCameraBounds covers the three bounds accessors, which had no test at all
+// while GetFrameRateBounds and GetGainBounds wrote their C out-parameters
+// through a *float64 reinterpreted as a *C.double. That only happened to work
+// because both types are 8 bytes on this platform; the values now come back
+// through C.double locals.
+func TestCameraBounds(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
+	tests := []struct {
+		name     string
+		call     func() (float64, float64, error)
+		min, max float64
+	}{
+		{"FrameRate", camera.GetFrameRateBounds, fakeFrameRateMin, fakeFrameRateMax},
+		{"Gain", camera.GetGainBounds, fakeGainMin, fakeGainMax},
+		{"ExposureTime", camera.GetExposureTimeBounds, fakeExposureTimeMin, fakeExposureTimeMax},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMin, gotMax, err := tt.call()
+			if err != nil {
+				t.Fatalf("Get%sBounds() returned error: %v", tt.name, err)
+			}
+
+			if gotMin > gotMax {
+				t.Errorf("Get%sBounds() = (%v, %v); the minimum must not exceed the maximum",
+					tt.name, gotMin, gotMax)
+			}
+
+			// Exact equality: a truncated or byte-shuffled out-parameter would
+			// not land on the documented value by accident.
+			if gotMin != tt.min || gotMax != tt.max {
+				t.Errorf("Get%sBounds() = (%v, %v), want the Fake values (%v, %v)",
+					tt.name, gotMin, gotMax, tt.min, tt.max)
+			}
+		})
+	}
+}
+
+// TestCameraCurrentValuesWithinBounds ties the bounds to the values the camera
+// actually reports, so a bounds accessor cannot pass by returning a plausible
+// but unrelated pair.
+func TestCameraCurrentValuesWithinBounds(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
+	tests := []struct {
+		name   string
+		value  func() (float64, error)
+		bounds func() (float64, float64, error)
+	}{
+		{"FrameRate", camera.GetFrameRate, camera.GetFrameRateBounds},
+		{"Gain", camera.GetGain, camera.GetGainBounds},
+		{"ExposureTime", camera.GetExposureTime, camera.GetExposureTimeBounds},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := tt.value()
+			if err != nil {
+				t.Fatalf("Get%s() returned error: %v", tt.name, err)
+			}
+
+			minVal, maxVal, err := tt.bounds()
+			if err != nil {
+				t.Fatalf("Get%sBounds() returned error: %v", tt.name, err)
+			}
+
+			if value < minVal || value > maxVal {
+				t.Errorf("Get%s() = %v, outside the reported bounds [%v, %v]",
+					tt.name, value, minVal, maxVal)
+			}
+		})
+	}
+}
+
+// TestGainAutoRoundTrip covers the new GetGainAuto. SetGainAuto had no getter,
+// so nothing could observe whether a mode was applied. Fake implements the
+// GainAuto node, so the round trip is assertable here.
+func TestGainAutoRoundTrip(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
+	original, err := camera.GetGainAuto()
+	if err != nil {
+		t.Fatalf("GetGainAuto() returned error: %v", err)
+	}
+
+	if original != aravis.AUTO_OFF {
+		t.Errorf("GetGainAuto() = %d, want the Fake default AUTO_OFF (%d)", original, aravis.AUTO_OFF)
+	}
+
+	// The loop ends on AUTO_OFF, so it restores the mode itself; a t.Cleanup
+	// would run after the deferred Close and touch a closed camera.
+	for _, mode := range []int{aravis.AUTO_CONTINUOUS, aravis.AUTO_ONCE, aravis.AUTO_OFF} {
+		if err := camera.SetGainAuto(mode); err != nil {
+			t.Fatalf("SetGainAuto(%d) returned error: %v", mode, err)
+		}
+
+		got, err := camera.GetGainAuto()
+		if err != nil {
+			t.Fatalf("GetGainAuto() returned error: %v", err)
+		}
+
+		if got != mode {
+			t.Errorf("GetGainAuto() = %d after SetGainAuto(%d)", got, mode)
+		}
+	}
+}

@@ -142,7 +142,7 @@ const (
 
 // Auto modes for the camera's automatic feature control. They mirror the
 // ArvAuto enumeration and are accepted by SetExposureTimeAuto and SetGainAuto,
-// and returned by GetExposureTimeAuto.
+// and returned by GetExposureTimeAuto and GetGainAuto.
 const (
 	// AUTO_OFF disables the automatic control; the feature keeps its manually
 	// set value.
@@ -746,16 +746,17 @@ func (c *Camera) GetFrameRate() (float64, error) {
 }
 
 // GetFrameRateBounds returns the minimum and maximum frame rate the camera
-// accepts, in frames per second, for the current configuration.
+// accepts, in frames per second, for the current configuration. A camera that
+// exposes no frame rate feature returns an error and both bounds unset.
 func (c *Camera) GetFrameRateBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
 
-	var minVal, maxVal float64
+	var minVal, maxVal C.double
 	C.arv_camera_get_frame_rate_bounds(
 		c.camera,
-		(*C.double)(unsafe.Pointer(&minVal)),
-		(*C.double)(unsafe.Pointer(&maxVal)),
+		&minVal,
+		&maxVal,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -997,16 +998,17 @@ func (c *Camera) GetGain() (float64, error) {
 }
 
 // GetGainBounds returns the minimum and maximum gain the camera accepts, in
-// the camera's gain unit.
+// the camera's gain unit. A camera that exposes no gain feature returns an
+// error and both bounds unset.
 func (c *Camera) GetGainBounds() (float64, float64, error) {
 	var gerror *C.GError
 	var err error
 
-	var minVal, maxVal float64
+	var minVal, maxVal C.double
 	C.arv_camera_get_gain_bounds(
 		c.camera,
-		(*C.double)(unsafe.Pointer(&minVal)),
-		(*C.double)(unsafe.Pointer(&maxVal)),
+		&minVal,
+		&maxVal,
 		&gerror,
 	)
 	if unsafe.Pointer(gerror) != nil {
@@ -1028,6 +1030,20 @@ func (c *Camera) SetGainAuto(mode int) error {
 	}
 
 	return err
+}
+
+// GetGainAuto returns the current automatic gain mode as one of the AUTO_*
+// constants.
+func (c *Camera) GetGainAuto() (int, error) {
+	var gerror *C.GError
+	var err error
+
+	mode := C.arv_camera_get_gain_auto(c.camera, &gerror)
+	if unsafe.Pointer(gerror) != nil {
+		err = errorFromGError(gerror)
+	}
+
+	return int(mode), err
 }
 
 // GetPayloadSize returns the size in bytes of one image payload for the
