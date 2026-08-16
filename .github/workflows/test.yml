@@ -304,7 +304,15 @@ jobs:
       with:
         # G103 flags every use of `unsafe`, which is unavoidable and idiomatic in
         # a CGO binding, so it is excluded to keep the scan signal meaningful.
-        args: '-no-fail -exclude=G103 -fmt sarif -out results.sarif ./...'
+        #
+        # G115 (integer overflow conversion) is excluded because it fires inside
+        # cgo's *generated* code, which has no location in this repository: gosec
+        # emits a SARIF result with an empty artifactLocation, and the upload step
+        # then fails with "locationFromSarifResult: expected artifact location".
+        # The finding it reports is `r2 = syscall.Errno(errno)` in the wrapper cgo
+        # generates for its two-result call form — not something any file here can
+        # annotate or fix.
+        args: '-no-fail -exclude=G103,G115 -fmt sarif -out results.sarif ./...'
 
     - name: Upload SARIF file
       uses: github/codeql-action/upload-sarif@v3
