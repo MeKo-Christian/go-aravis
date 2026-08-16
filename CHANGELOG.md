@@ -139,8 +139,9 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   `Device` wrapping nothing with no indication anything had failed. Both now return a real
   error, and every `Device` method in `device.go` guards its receiver against a nil *and* a
   closed device instead of passing NULL — or, after `Close`, a dangling pointer — to
-  Aravis, which asserted and logged a CRITICAL. The `*Fast` accessors in `performance.go`
-  still need the same guard; that file belongs to a parallel P6 change.
+  Aravis, which asserted and logged a CRITICAL. The twelve `*Fast` accessors in
+  `performance.go` are guarded the same way — the six on `Device` reuse that file's
+  `check`, the six on `Camera` use `Camera.IsClosed`.
 - `GetDataSlice` no longer uses the deprecated `reflect.SliceHeader`.
 - **`get_image` example error handling**: `http.Error` calls fell through instead of
   returning, `TimeoutPopBuffer`'s error went unchecked, and a bad-status branch

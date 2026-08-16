@@ -82,6 +82,7 @@ in isolation.
 | `bayer_test.go` | the debayering edge cases (pure Go, no backend needed) |
 | `device_feature_test.go` | the generic `Device` feature getters: missing feature, wrong type, happy path, `*Fast` parity |
 | `errno_test.go` | the accessors whose C call has no `GError` must return a nil error |
+| `fast_guard_test.go` | the twelve `*Fast` methods reject a nil and a closed receiver, and still work on an open one |
 
 Pure-Go units — the error mapping, `toBool`, `closeFlag`, the C-string cache —
 are tested in the **root package** instead (`internal_test.go`,

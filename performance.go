@@ -6,6 +6,7 @@ package aravis
 import "C"
 
 import (
+	"errors"
 	"unsafe"
 )
 
@@ -95,12 +96,23 @@ func getCachedCString(s string) (cstr *C.char, mustFree bool) {
 // never freed by design — it is bounded by the fixed set of feature names the
 // package interns, and the raw *C.char pointers it hands out have no lifetime
 // tracking that would make reclaiming them safe.
+//
+// Every method below guards its receiver before handing the pointer to Aravis,
+// the Camera ones with [Camera.IsClosed] and the Device ones with the same
+// check the methods in device.go use. A bare nil check would not do: Close
+// drops the reference but leaves the pointer field set, so a closed handle is
+// not NULL but dangling, and Aravis has no assertion that catches that. The
+// shared close flag is the only thing that knows.
 
 // GetWidthFast returns the camera's current image width in pixels by reading
 // the "Width" integer feature. It is the allocation-free variant of the regular
 // width accessor: the feature name is interned, so no per-call C.CString
 // conversion happens.
 func (c *Camera) GetWidthFast() (int, error) {
+	if c.IsClosed() {
+		return 0, errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Width")
 	if mustFree {
@@ -117,6 +129,10 @@ func (c *Camera) GetWidthFast() (int, error) {
 // the "Height" integer feature. The feature name is interned, so the call
 // avoids a per-call C.CString conversion.
 func (c *Camera) GetHeightFast() (int, error) {
+	if c.IsClosed() {
+		return 0, errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Height")
 	if mustFree {
@@ -133,6 +149,10 @@ func (c *Camera) GetHeightFast() (int, error) {
 // writing the "ExposureTime" float feature. The feature name is interned, so
 // the call avoids a per-call C.CString conversion.
 func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
+	if c.IsClosed() {
+		return errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	var err error
 	cfeature, mustFree := getCachedCString("ExposureTime")
@@ -150,6 +170,10 @@ func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
 // reading the "ExposureTime" float feature. The feature name is interned, so
 // the call avoids a per-call C.CString conversion.
 func (c *Camera) GetExposureTimeFast() (float64, error) {
+	if c.IsClosed() {
+		return 0, errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("ExposureTime")
 	if mustFree {
@@ -166,6 +190,10 @@ func (c *Camera) GetExposureTimeFast() (float64, error) {
 // unit is camera specific. The feature name is interned, so the call avoids a
 // per-call C.CString conversion.
 func (c *Camera) SetGainFast(gain float64) error {
+	if c.IsClosed() {
+		return errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	var err error
 	cfeature, mustFree := getCachedCString("Gain")
@@ -183,6 +211,10 @@ func (c *Camera) SetGainFast(gain float64) error {
 // The unit is camera specific. The feature name is interned, so the call avoids
 // a per-call C.CString conversion.
 func (c *Camera) GetGainFast() (float64, error) {
+	if c.IsClosed() {
+		return 0, errors.New("aravis: camera is closed")
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Gain")
 	if mustFree {
@@ -208,6 +240,10 @@ func (c *Camera) GetGainFast() (float64, error) {
 // feature. The feature name avoids a C.CString conversion when it is one of the
 // interned common feature names; other names are converted per call.
 func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
+	if err := d.check(); err != nil {
+		return "", err
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
 	if mustFree {
@@ -224,6 +260,10 @@ func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
 // Only the feature name can come from the intern table; value varies per call
 // and is always converted and freed.
 func (d *Device) SetStringFeatureValueFast(feature, value string) error {
+	if err := d.check(); err != nil {
+		return err
+	}
+
 	var gerror *C.GError
 	var err error
 
@@ -246,6 +286,10 @@ func (d *Device) SetStringFeatureValueFast(feature, value string) error {
 // feature. The feature name avoids a C.CString conversion when it is one of the
 // interned common feature names; other names are converted per call.
 func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
+	if err := d.check(); err != nil {
+		return 0, err
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
 	if mustFree {
@@ -262,6 +306,10 @@ func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 // The feature name avoids a C.CString conversion when it is one of the interned
 // common feature names; other names are converted per call.
 func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
+	if err := d.check(); err != nil {
+		return err
+	}
+
 	var gerror *C.GError
 	var err error
 	cfeature, mustFree := getCachedCString(feature)
@@ -279,6 +327,10 @@ func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
 // feature. The feature name avoids a C.CString conversion when it is one of the
 // interned common feature names; other names are converted per call.
 func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
+	if err := d.check(); err != nil {
+		return 0, err
+	}
+
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
 	if mustFree {
@@ -295,6 +347,10 @@ func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 // feature name avoids a C.CString conversion when it is one of the interned
 // common feature names; other names are converted per call.
 func (d *Device) SetFloatFeatureValueFast(feature string, value float64) error {
+	if err := d.check(); err != nil {
+		return err
+	}
+
 	var gerror *C.GError
 	var err error
 	cfeature, mustFree := getCachedCString(feature)

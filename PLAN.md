@@ -447,9 +447,11 @@ behavior is wrong. Ordered by severity.
       leaves the pointer in the struct, so a bare nil check still let a closed camera or
       device reach Aravis with a dangling pointer — which no assertion inside the library
       catches. `Camera.IsClosed`/`Device.IsClosed` consult the shared close flag, so they
-      are what the guards ask. Still open, and left to the `performance.go` change so the
-      two do not collide: the six `*Fast` accessors are `Device` methods too and carry no
-      guard at all.
+      are what the guards ask. The twelve `*Fast` accessors were left to the
+      `performance.go` change so the two would not collide, and are guarded there: the six
+      on `Device` reuse `check`, the six on `Camera` use `Camera.IsClosed`. Both halves
+      are covered by `tests/fast_guard_test.go`, with an open-handle positive control so
+      the guards cannot pass by rejecting everything.
 - [ ] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
       both as a freshly allocated `errors.New("aravis returned a null pointer")`, which
       is non-comparable, so callers cannot use `errors.Is` to detect a dropped frame.
