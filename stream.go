@@ -59,8 +59,15 @@ func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	return buf, err
 }
 
+// Close releases the underlying stream. It is safe to call Close more than
+// once; subsequent calls are no-ops. The Stream must not be used afterwards.
 func (s *Stream) Close() {
+	if s.stream == nil {
+		return
+	}
+
 	C.g_object_unref(C.gpointer(s.stream))
+	s.stream = nil
 }
 
 func (s *Stream) SetPropertyLong(property string, value int64) {

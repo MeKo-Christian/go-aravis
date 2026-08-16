@@ -60,6 +60,31 @@ const (
 
 type Device struct {
 	device *C.struct__ArvDevice
+
+	// owned records whether this Device holds a reference of its own.
+	// [OpenDevice] does; [Camera.GetDevice] only borrows the camera's device,
+	// which the camera itself releases. Close must unref the former and leave
+	// the latter alone.
+	owned bool
+}
+
+// Close releases the device if this Device owns a reference to it, which is
+// the case for devices obtained from [OpenDevice]. For a device borrowed from
+// [Camera.GetDevice] it does nothing — that one belongs to the camera.
+//
+// Close is safe to call more than once. The Device must not be used
+// afterwards.
+func (d *Device) Close() {
+	if d.device == nil {
+		return
+	}
+
+	if d.owned {
+		C.g_object_unref(C.gpointer(d.device))
+	}
+
+	d.device = nil
+	d.owned = false
 }
 
 func (d *Device) TakeControl() (bool, error) {
