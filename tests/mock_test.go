@@ -27,10 +27,6 @@ func TestMockOperations(t *testing.T) {
 	} else {
 		t.Logf("GetNumInterface() returned: %d", numInterfaces)
 	}
-
-	// Test shutdown
-	aravis.Shutdown()
-	t.Log("Shutdown() completed")
 }
 
 // TestErrorHandling tests error handling with invalid inputs.

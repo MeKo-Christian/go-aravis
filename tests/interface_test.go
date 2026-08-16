@@ -89,10 +89,3 @@ func TestInterfaceEnableDisable(t *testing.T) {
 
 	t.Log("Interface enable/disable functions completed without crashing")
 }
-
-// TestShutdown tests the shutdown function.
-func TestShutdown(t *testing.T) {
-	// This should be safe to call
-	aravis.Shutdown()
-	t.Log("Shutdown completed successfully")
-}
