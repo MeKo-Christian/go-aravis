@@ -10,6 +10,12 @@ of correctness bugs, false documentation claims, and build/tooling breakage. Thi
 phase captures the concrete, fixable items, ordered by priority. Checkboxes track
 progress.
 
+Anything still outstanding sits at the end of its section under an **Open Tasks**
+heading, so what is left to do is in one place per phase rather than interleaved
+with the record of what was done. A phase without such a heading has nothing
+open. Each open item keeps the reasoning for why it is still open — none of them
+are oversights.
+
 ### P0 — Correctness bugs (code can crash, corrupt, or silently misbehave)
 
 - [x] **32-bit/64-bit pointer mismatch in out-params.** In `camera.go`,
@@ -279,28 +285,6 @@ possible.
       pinning a backend quirk as this binding's contract; and
       `NewCamera("")`/`OpenDevice("")` still skip, for the reason recorded under
       P1.
-- [ ] **Introduce a seam over the C calls** so a genuine fake can be injected.
-      **Deferred, not resolved.** In the meantime Aravis's built-in Fake
-      interface serves as the explicit test seam: `tests/fake_test.go`'s
-      `TestMain` enables it and disables the GigE and USB3 interfaces, so
-      discovery is deterministic (exactly one device), hermetic (a camera on the
-      developer's machine cannot change an assertion) and fast (`./tests` went
-      from ~37 s to ~6 s). It hard-fails rather than skipping when Fake is
-      unreachable, since Fake ships in every libaravis 0.8 build and a green run
-      full of skips is the false signal this phase exists to remove.
-      `ARAVIS_TEST_HARDWARE=1` keeps the real interfaces enabled, and in that
-      mode the acquisition tests bind to the first non-Fake device and fail when
-      none is attached — otherwise `make test-integration` would report success
-      on hardware coverage it never exercised (raised in PR review).
-      What that does *not* give is error-path injection: there is no way to make
-      `arv_camera_set_region` fail on demand. Weigh that against the cost — a Go
-      interface over the ~180 cgo calls would have to be threaded through every
-      wrapper type and constructor, a breaking change across ~110 methods — and
-      against the fact that the bugs this repository actually had (pointer
-      widths, `GError` versus `errno`, unref counts, NULL sentinels) live in the
-      layer such a seam would replace, so a mock would have passed every one of
-      them. Left open deliberately; `mock_test.go`, the file this item named, is
-      gone either way.
 - [x] **Add `-race` tests.** `SetControlLostHandler` is hammered by concurrent
       installs and removals across copies of a real Fake camera
       (`tests/lifecycle_test.go`), and `closeFlag.claim` by 64 concurrent closers
@@ -344,12 +328,39 @@ root-package tests entirely. Coverage now reports 35.5% of the library. CI also
 gained a guard that fails on any undocumented skip, since a skip is precisely
 the silence this phase removed.
 
-### P6 — Correctness bugs found while documenting (new, not yet fixed)
+#### Open Tasks
+
+- [ ] **Introduce a seam over the C calls** so a genuine fake can be injected.
+      **Deferred, not resolved.** In the meantime Aravis's built-in Fake
+      interface serves as the explicit test seam: `tests/fake_test.go`'s
+      `TestMain` enables it and disables the GigE and USB3 interfaces, so
+      discovery is deterministic (exactly one device), hermetic (a camera on the
+      developer's machine cannot change an assertion) and fast (`./tests` went
+      from ~37 s to ~6 s). It hard-fails rather than skipping when Fake is
+      unreachable, since Fake ships in every libaravis 0.8 build and a green run
+      full of skips is the false signal this phase exists to remove.
+      `ARAVIS_TEST_HARDWARE=1` keeps the real interfaces enabled, and in that
+      mode the acquisition tests bind to the first non-Fake device and fail when
+      none is attached — otherwise `make test-integration` would report success
+      on hardware coverage it never exercised (raised in PR review).
+      What that does *not* give is error-path injection: there is no way to make
+      `arv_camera_set_region` fail on demand. Weigh that against the cost — a Go
+      interface over the ~180 cgo calls would have to be threaded through every
+      wrapper type and constructor, a breaking change across ~110 methods — and
+      against the fact that the bugs this repository actually had (pointer
+      widths, `GError` versus `errno`, unref counts, NULL sentinels) live in the
+      layer such a seam would replace, so a mock would have passed every one of
+      them. Left open deliberately; `mock_test.go`, the file this item named, is
+      gone either way.
+
+### P6 — Correctness bugs found while documenting
 
 Writing godoc for every exported symbol meant reading every function body against the
 Aravis call it wraps, which surfaced a fresh set of bugs. None were fixed in the P3
-docs-only pass; the documentation describes current behavior, including where that
-behavior is wrong. Ordered by severity.
+docs-only pass, so for a while the documentation described the behavior as it was,
+including where that behavior was wrong. They have since been fixed across four
+themed PRs, and the doc comments that recorded the defects went with them.
+Ordered by severity.
 
 - [x] **`errno` is being reported as an error across the package.** Many methods used
       cgo's two-result form (`v, err := C.arv_...`), where the second value is `errno`.
@@ -537,18 +548,6 @@ behavior is wrong. Ordered by severity.
       one-shot frame and does the same; `examples/performance_demo` keeps a
       `[]aravis.Buffer` of pre-push copies, which is exactly the shape the old model made
       dangerous, and now says so.
-- [ ] **Narrow the return types of the accessors that cannot fail.** The errno fix left
-      every signature intact, so a growing set of methods returns an `error` that is
-      documented as always nil: `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`,
-      `GetDataInto`, `GetStatus`, `GetNumParts`, `FindComponent`, and the four
-      package-level accessors `GetDeviceId`, `GetInterfaceId`, `GetNumDevices`,
-      `GetNumInterface`. Dropping the `error` is a breaking change at every call site, so
-      it stays deferred and should land in one deliberate sweep. The list is shorter than
-      it was: the eight part accessors and the three pops report real errors now, so they
-      have left it, and the API changes it was waiting to travel with (`Stream.PushBuffer`
-      gaining an `error`, `Buffer.Close`, the part range checks) have landed. `unparam` is
-      enabled in `.golangci.toml` and does not fire on these, so the interim state stays
-      lint-clean.
 - [x] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
       against `GetNumParts`.
       **Resolved.** An unexported `checkPart` validates the index — including a negative
@@ -578,6 +577,21 @@ behavior is wrong. Ordered by severity.
       `unsafe.Pointer`, matching `GetExposureTimeBounds`. All three bounds accessors and
       the `GainAuto` round trip are covered against the Fake camera, which had no tests
       at all before.
+
+#### Open Tasks
+
+- [ ] **Narrow the return types of the accessors that cannot fail.** The errno fix left
+      every signature intact, so a growing set of methods returns an `error` that is
+      documented as always nil: `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`,
+      `GetDataInto`, `GetStatus`, `GetNumParts`, `FindComponent`, and the four
+      package-level accessors `GetDeviceId`, `GetInterfaceId`, `GetNumDevices`,
+      `GetNumInterface`. Dropping the `error` is a breaking change at every call site, so
+      it stays deferred and should land in one deliberate sweep. The list is shorter than
+      it was: the eight part accessors and the three pops report real errors now, so they
+      have left it, and the API changes it was waiting to travel with (`Stream.PushBuffer`
+      gaining an `error`, `Buffer.Close`, the part range checks) have landed. `unparam` is
+      enabled in `.golangci.toml` and does not fire on these, so the interim state stays
+      lint-clean.
 
 ### Suggested execution order
 
