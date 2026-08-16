@@ -134,14 +134,22 @@ test-coverage: ## Run tests with coverage
 # TestEnableDisableInterfaceChangesDiscovery provokes on purpose, so a
 # WARNING here is not evidence of a defect the way a CRITICAL is.
 #
-# GLIB_TEST_OUTPUT is reused if it already exists, which is what lets CI check
-# the output of the run it has already paid for instead of running the suite a
-# second time.
+# The suite is re-run by default, so a local invocation always inspects output
+# that matches the working tree. Set GLIB_REUSE_OUTPUT=1 to check an existing
+# GLIB_TEST_OUTPUT instead — CI does this to grade the run it has already paid
+# for rather than running the suite a second time. Reuse is opt-in because a
+# leftover log silently turns this target green: the file survives a run that
+# failed on an ordinary Go assertion, and it does not track later edits.
 GLIB_TEST_OUTPUT ?= test-output.txt
+GLIB_REUSE_OUTPUT ?=
 
 test-glib-clean: ## Fail if the test suite produced GLib CRITICAL output
 	@echo "$(BOLD)Checking the test output for GLib diagnostics...$(NC)"
-	@if [ ! -f $(GLIB_TEST_OUTPUT) ]; then \
+	@if [ -n "$(GLIB_REUSE_OUTPUT)" ] && [ ! -f $(GLIB_TEST_OUTPUT) ]; then \
+		echo "$(RED)✗ GLIB_REUSE_OUTPUT is set but $(GLIB_TEST_OUTPUT) does not exist$(NC)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(GLIB_REUSE_OUTPUT)" ]; then \
 		set -o pipefail; \
 		CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... 2>&1 | tee $(GLIB_TEST_OUTPUT); \
 	fi
