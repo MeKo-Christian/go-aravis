@@ -1,191 +1,157 @@
 package tests
 
-import (
-	"testing"
+// The benchmarks in this file run against Aravis's Fake backend, on a buffer
+// that has actually been filled.
+//
+// Both of those were previously untrue, and together they made every number
+// meaningless. Each benchmark skipped unless a camera was attached, so none
+// ever ran in CI; and the buffer benchmarks measured a fresh NewBuffer, whose
+// received size is zero, so they timed the `if size == 0 { return }` early
+// return rather than any data access.
+//
+// What running them in CI buys is that the bodies execute and their errors are
+// checked, not that the timings are comparable between runs — figures from a
+// shared runner are not, which is the point PERFORMANCE.md already makes.
 
-	aravis "github.com/MeKo-Christian/go-aravis"
-)
+import "testing"
 
-// BenchmarkParameterAccessComparison benchmarks standard vs fast parameter access.
-func BenchmarkParameterAccessComparison(b *testing.B) {
-	aravis.UpdateDeviceList()
+// benchInt times a standard/fast pair of int accessors, failing rather than
+// timing an error path. Without the probe, a benchmark whose every iteration
+// fails reads as an exceptionally fast one.
+func benchInt(b *testing.B, name string, standard, fast func() (int, error)) {
+	b.Helper()
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		b.Skip("No cameras connected, skipping parameter access benchmarks")
-		return
+	if _, err := standard(); err != nil {
+		b.Fatalf("Get%s() returned error: %v", name, err)
 	}
 
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		b.Skip("Failed to get device ID")
-		return
+	if _, err := fast(); err != nil {
+		b.Fatalf("Get%sFast() returned error: %v", name, err)
 	}
 
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		b.Skip("Failed to create camera")
-		return
-	}
-	defer camera.Close()
-
-	// Benchmark width access
-	b.Run("Width/Standard", func(b *testing.B) {
+	b.Run(name+"/Standard", func(b *testing.B) {
 		for range b.N {
-			_, _ = camera.GetWidth()
+			_, _ = standard()
 		}
 	})
 
-	b.Run("Width/Fast", func(b *testing.B) {
+	b.Run(name+"/Fast", func(b *testing.B) {
 		for range b.N {
-			_, _ = camera.GetWidthFast()
-		}
-	})
-
-	// Benchmark height access
-	b.Run("Height/Standard", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetHeight()
-		}
-	})
-
-	b.Run("Height/Fast", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetHeightFast()
-		}
-	})
-
-	// Benchmark exposure time access
-	b.Run("ExposureTime/Standard", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetExposureTime()
-		}
-	})
-
-	b.Run("ExposureTime/Fast", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetExposureTimeFast()
-		}
-	})
-
-	// Benchmark gain access
-	b.Run("Gain/Standard", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetGain()
-		}
-	})
-
-	b.Run("Gain/Fast", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetGainFast()
+			_, _ = fast()
 		}
 	})
 }
 
-// BenchmarkBufferDataAccessComparison benchmarks buffer data access methods.
-func BenchmarkBufferDataAccessComparison(b *testing.B) {
-	aravis.UpdateDeviceList()
+// benchFloat is the same for float accessors, except that the fast path may be
+// genuinely unavailable: GetExposureTimeFast and GetGainFast address the fixed
+// ExposureTime and Gain GenICam nodes, which the Fake camera does not expose.
+// Timing that error path would produce a fast, meaningless number, so the pair
+// is skipped instead.
+func benchFloat(b *testing.B, name string, standard, fast func() (float64, error)) {
+	b.Helper()
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		b.Skip("No cameras connected, skipping buffer access benchmarks")
-		return
+	if _, err := standard(); err != nil {
+		b.Fatalf("Get%s() returned error: %v", name, err)
 	}
 
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		b.Skip("Failed to get device ID")
-		return
-	}
+	b.Run(name+"/Standard", func(b *testing.B) {
+		for range b.N {
+			_, _ = standard()
+		}
+	})
 
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		b.Skip("Failed to create camera")
-		return
-	}
+	b.Run(name+"/Fast", func(b *testing.B) {
+		if _, err := fast(); err != nil {
+			b.Skipf("Get%sFast() = %v; this camera exposes no matching GenICam node", name, err)
+		}
+
+		for range b.N {
+			_, _ = fast()
+		}
+	})
+}
+
+// BenchmarkParameterAccess compares the standard and *Fast parameter
+// accessors. It absorbs the near-identical BenchmarkCameraParameterAccess that
+// used to sit in camera_test.go.
+func BenchmarkParameterAccess(b *testing.B) {
+	camera := requireFakeCamera(b)
 	defer camera.Close()
 
-	payloadSize, err := camera.GetPayloadSize()
-	if err != nil {
-		b.Skip("Failed to get payload size")
-		return
-	}
+	benchInt(b, "Width", camera.GetWidth, camera.GetWidthFast)
+	benchInt(b, "Height", camera.GetHeight, camera.GetHeightFast)
+	benchFloat(b, "ExposureTime", camera.GetExposureTime, camera.GetExposureTimeFast)
+	benchFloat(b, "Gain", camera.GetGain, camera.GetGainFast)
+}
 
-	buffer, err := aravis.NewBuffer(payloadSize)
-	if err != nil {
-		b.Skip("Failed to create buffer")
-		return
-	}
+// BenchmarkBufferDataAccess compares the four ways of reaching a payload. It
+// absorbs the duplicate of the same name from buffer_test.go.
+//
+// SetBytes is what makes the comparison legible: GetData copies, GetDataInto
+// copies into memory the caller already owns, and GetDataSlice and
+// GetDataUnsafe do not copy at all, so throughput separates them where a bare
+// ns/op does not.
+func BenchmarkBufferDataAccess(b *testing.B) {
+	buffer, want := seededBuffer(b)
+	destBuffer := make([]byte, len(want))
 
-	// Pre-allocate destination buffer
-	destBuffer := make([]byte, payloadSize)
+	b.Run("GetData", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
 
-	b.Run("BufferAccess/GetData", func(b *testing.B) {
 		for range b.N {
 			_, _ = buffer.GetData()
 		}
 	})
 
-	b.Run("BufferAccess/GetDataSlice", func(b *testing.B) {
+	b.Run("GetDataSlice", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
 			_, _ = buffer.GetDataSlice()
 		}
 	})
 
-	b.Run("BufferAccess/GetDataInto", func(b *testing.B) {
+	b.Run("GetDataInto", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
 			_, _ = buffer.GetDataInto(destBuffer)
 		}
 	})
 
-	b.Run("BufferAccess/GetDataUnsafe", func(b *testing.B) {
+	b.Run("GetDataUnsafe", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
 			_, _, _ = buffer.GetDataUnsafe()
 		}
 	})
 }
 
-// BenchmarkCombinedOperations benchmarks realistic usage patterns.
+// BenchmarkCombinedOperations times the shape of a real streaming loop: read a
+// few parameters, then take the payload. The three variants differ only in
+// which accessors they reach for.
+//
+// The exposure read is deliberately the standard call in all three: its fast
+// counterpart is unavailable on Fake, and substituting an error path into one
+// arm of a comparison would make the comparison a lie.
 func BenchmarkCombinedOperations(b *testing.B) {
-	aravis.UpdateDeviceList()
+	buffer, want := seededBuffer(b)
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		b.Skip("No cameras connected, skipping combined operations benchmarks")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		b.Skip("Failed to get device ID")
-		return
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		b.Skip("Failed to create camera")
-		return
-	}
+	camera := requireFakeCamera(b)
 	defer camera.Close()
 
-	payloadSize, err := camera.GetPayloadSize()
-	if err != nil {
-		b.Skip("Failed to get payload size")
-		return
-	}
+	destBuffer := make([]byte, len(want))
 
-	buffer, err := aravis.NewBuffer(payloadSize)
-	if err != nil {
-		b.Skip("Failed to create buffer")
-		return
-	}
-
-	destBuffer := make([]byte, payloadSize)
-
-	// Benchmark typical streaming loop operations
 	b.Run("StreamingLoop/Standard", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
-			// Typical operations in a streaming loop
 			_, _ = camera.GetWidth()
 			_, _ = camera.GetHeight()
 			_, _ = camera.GetExposureTime()
@@ -194,64 +160,42 @@ func BenchmarkCombinedOperations(b *testing.B) {
 	})
 
 	b.Run("StreamingLoop/Optimized", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
-			// Optimized operations in a streaming loop
 			_, _ = camera.GetWidthFast()
 			_, _ = camera.GetHeightFast()
-			_, _ = camera.GetExposureTimeFast()
+			_, _ = camera.GetExposureTime()
 			_, _ = buffer.GetDataInto(destBuffer)
 		}
 	})
 
 	b.Run("StreamingLoop/ZeroCopy", func(b *testing.B) {
+		b.SetBytes(int64(len(want)))
+		b.ReportAllocs()
+
 		for range b.N {
-			// Zero-copy operations in a streaming loop
 			_, _ = camera.GetWidthFast()
 			_, _ = camera.GetHeightFast()
-			_, _ = camera.GetExposureTimeFast()
+			_, _ = camera.GetExposureTime()
 			_, _ = buffer.GetDataSlice()
 		}
 	})
 }
 
-// BenchmarkMemoryAllocations measures memory allocation patterns.
+// BenchmarkMemoryAllocations is the allocation counterpart: it is what backs
+// the one quantitative claim PERFORMANCE.md still makes, that GetDataInto
+// copies without allocating. TestGetDataIntoZeroAllocations asserts that; this
+// shows it next to the alternatives.
 func BenchmarkMemoryAllocations(b *testing.B) {
-	aravis.UpdateDeviceList()
+	buffer, want := seededBuffer(b)
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		b.Skip("No cameras connected, skipping memory allocation benchmarks")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		b.Skip("Failed to get device ID")
-		return
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		b.Skip("Failed to create camera")
-		return
-	}
+	camera := requireFakeCamera(b)
 	defer camera.Close()
 
-	payloadSize, err := camera.GetPayloadSize()
-	if err != nil {
-		b.Skip("Failed to get payload size")
-		return
-	}
+	destBuffer := make([]byte, len(want))
 
-	buffer, err := aravis.NewBuffer(payloadSize)
-	if err != nil {
-		b.Skip("Failed to create buffer")
-		return
-	}
-
-	destBuffer := make([]byte, payloadSize)
-
-	// Measure allocations per operation
 	b.Run("Allocations/StandardMethods", func(b *testing.B) {
 		b.ReportAllocs()
 
