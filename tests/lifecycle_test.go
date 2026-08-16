@@ -7,30 +7,6 @@ import (
 	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
-// fakeCamera returns a camera backed by Aravis's built-in "Fake" interface, so
-// that the lifecycle tests operate on a real ArvCamera with a real reference
-// count instead of a zero value. Without one, every Close returns at the nil
-// guard and no test here would ever reach an unref.
-//
-// The caller owns the camera and is responsible for closing it — that is
-// precisely what most of these tests are about.
-func fakeCamera(t *testing.T) aravis.Camera {
-	t.Helper()
-
-	aravis.EnableInterface("Fake")
-	aravis.UpdateDeviceList()
-
-	camera, err := aravis.NewCamera("Fake_1")
-	if err != nil {
-		t.Fatalf("NewCamera(Fake_1) returned error: %v", err)
-	}
-	if camera.IsNil() {
-		t.Fatal("NewCamera(Fake_1) returned a nil camera")
-	}
-
-	return camera
-}
-
 // TestCloseOnZeroValue covers the nil guards: an unguarded Close called
 // g_object_unref on a NULL pointer.
 func TestCloseOnZeroValue(t *testing.T) {
@@ -59,7 +35,7 @@ func TestCloseOnZeroValue(t *testing.T) {
 // GLib reports as a critical and which corrupts the object. The close state is
 // shared between copies instead, so exactly one of these calls unrefs.
 func TestCameraCloseUnrefsOnceAcrossCopies(t *testing.T) {
-	camera := fakeCamera(t)
+	camera := requireFakeCamera(t)
 	duplicate := camera
 
 	camera.Close()
@@ -78,7 +54,7 @@ func TestCameraCloseUnrefsOnceAcrossCopies(t *testing.T) {
 // TestStreamCloseUnrefsOnceAcrossCopies is the same guarantee for Stream, which
 // the test suite also passes around by value.
 func TestStreamCloseUnrefsOnceAcrossCopies(t *testing.T) {
-	camera := fakeCamera(t)
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
 	stream, err := camera.CreateStream()
@@ -101,12 +77,9 @@ func TestStreamCloseUnrefsOnceAcrossCopies(t *testing.T) {
 // hands to the caller: it must be dropped exactly once, however many copies of
 // the Device exist.
 func TestOwnedDeviceCloseUnrefsOnceAcrossCopies(t *testing.T) {
-	aravis.EnableInterface("Fake")
-	aravis.UpdateDeviceList()
-
-	device, err := aravis.OpenDevice("Fake_1")
+	device, err := aravis.OpenDevice(fakeDeviceID)
 	if err != nil {
-		t.Fatalf("OpenDevice(Fake_1) returned error: %v", err)
+		t.Fatalf("OpenDevice(%s) returned error: %v", fakeDeviceID, err)
 	}
 
 	duplicate := device
@@ -133,9 +106,6 @@ func TestOwnedDeviceCloseUnrefsOnceAcrossCopies(t *testing.T) {
 // "device not found" even while the interface enumerates Fake_1 — so the test
 // skips rather than pretending to cover the contract.
 func TestOpenDeviceFirstAvailable(t *testing.T) {
-	aravis.EnableInterface("Fake")
-	aravis.UpdateDeviceList()
-
 	device, err := aravis.OpenDevice("")
 	if err != nil {
 		t.Skipf("OpenDevice(\"\") = %v; no backend here implements the first-device lookup", err)
@@ -152,7 +122,7 @@ func TestOpenDeviceFirstAvailable(t *testing.T) {
 // not drop a reference the camera still holds. The camera has to stay usable
 // afterwards, which is what the trailing call checks.
 func TestBorrowedDeviceCloseDoesNotUnref(t *testing.T) {
-	camera := fakeCamera(t)
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
 	device, err := camera.GetDevice()
@@ -181,7 +151,7 @@ func TestSetControlLostHandlerOnClosedCamera(t *testing.T) {
 	})
 
 	t.Run("closed camera", func(t *testing.T) {
-		camera := fakeCamera(t)
+		camera := requireFakeCamera(t)
 		camera.Close()
 
 		if err := camera.SetControlLostHandler(func() {}); err == nil {
@@ -195,7 +165,7 @@ func TestSetControlLostHandlerOnClosedCamera(t *testing.T) {
 // of its own. With the registration state stored per Go value, both copies
 // would see key zero and each connect.
 func TestSetControlLostHandlerReplacesAcrossCopies(t *testing.T) {
-	camera := fakeCamera(t)
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
 	duplicate := camera
@@ -228,7 +198,7 @@ func TestSetControlLostHandlerConcurrent(t *testing.T) {
 		iterations = 50
 	)
 
-	camera := fakeCamera(t)
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
 	var wg sync.WaitGroup

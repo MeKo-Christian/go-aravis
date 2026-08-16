@@ -220,31 +220,131 @@ hard-deprecated. The library stays on Aravis 0.8 (current stable).
 
 ### P5 — Tests (make the suite mean something)
 
-- [~] **Add real unit tests for pure-Go logic** (no hardware needed): **Done for
-  `bayer.go`** — `tests/bayer_test.go` covers the edge-panic regression, the
-  opaque-alpha fix, and the CFA edge-phase reflection. **Done for the error
-  mapping and `toBool`** — `internal_test.go` (repo root, `package aravis`;
-  note Go forbids `import "C"` in `_test.go` files, which is why the pure-Go
-  `newAravisError` was split out of the cgo glue). **Done for `GetDataInto`** —
-  `tests/buffer_data_test.go` covers the clamp, overrun, empty/nil-dest, and
-  zero-allocation cases, seeding a real payload through Aravis's built-in Fake
-  interface (no hardware). Still TODO: `getCachedCString` caching correctness.
-- [ ] **Replace log-only "tests" with real assertions or delete them.** Many
-      tests (`TestErrorHandling`, `TestConstants`, `TestCameraCreationWithoutDevice`,
-      etc.) only `t.Logf` and cannot fail, inflating a false sense of coverage.
-- [ ] **Introduce a seam over the C calls** so a genuine fake can be injected
-      (`mock_test.go` currently contains no mock and calls the real C layer).
-- [~] **Add `-race` tests** that hammer `getCachedCString` and
-      `SetControlLostHandler` concurrently (both have real race exposure).
-      **Done for `SetControlLostHandler`** — `tests/lifecycle_test.go` drives
-      concurrent installs and removals across several cameras under `-race`.
-      `getCachedCString` no longer has a race to test: the cache became
-      write-once under P2, so its mutex is gone. `CleanupPerformanceCache` no
-      longer exists either (see P2).
-- [ ] **Fix `TimeoutPopBuffer(1000)` unit bug** in `buffer_test.go` — the literal
-      is 1000 ns (1 µs), not the "1 second" the comment claims.
-- [ ] **Stop advertising unrunnable benchmarks** as measured results, or make
-      them run on synthetic filled buffers so numbers are reproducible in CI.
+The finding that reframed this phase: Aravis ships a built-in **Fake** software
+backend that produces a real `ArvDevice`, a real `ArvStream` and real, filled
+buffers with no hardware. Two test files already used it — but enabling it is
+global process state, so whichever test ran first decided what the rest of the
+suite saw. `go test -run TestCameraWithRealDevice ./tests/` skipped with "No
+cameras connected" while the same test in a full-package run passed against
+`Fake_1`. So the ~20 tests gated on `GetNumDevices() == 0` were Fake tests in
+disguise, and a test run alone asserted something different from the same test
+run in company. Making the backend explicit is what made the rest of P5
+possible.
+
+- [x] **Add real unit tests for pure-Go logic** (no hardware needed). Done for
+      `bayer.go` (`tests/bayer_test.go`: the edge-panic regression, the
+      opaque-alpha fix, the CFA edge-phase reflection), for the error mapping and
+      `toBool` (`internal_test.go`, repo root, `package aravis` — Go forbids
+      `import "C"` in `_test.go` files, which is why the pure-Go
+      `newAravisError` was split out of the cgo glue), for `closeFlag`
+      (`lifecycle_test.go`) and for `getCachedCString` (`performance_cache_test.go`,
+      which pins the bound the cache depends on: interned names are reused,
+      arbitrary names get a temporary the caller frees, and the cache never grows
+      after `init`). `GetDataInto` is covered by `tests/buffer_data_test.go` —
+      clamp, overrun, empty/nil dest, and the zero-allocation assertion.
+      The "still TODO: `getCachedCString`" note this item used to carry was
+      stale; that test landed with P2.
+- [x] **Replace log-only "tests" with real assertions or delete them.** Sixteen
+      tests and helpers could not fail. `mock_test.go` was deleted outright: it
+      contained no mock, called the real C layer, and five of its seven tests
+      only logged. Its content was redistributed rather than dropped.
+      Three things were deleted rather than converted, because no contract
+      existed to assert: `TestConstants` (every constant is a compile-time alias
+      of a C enum, so any assertion restates its own definition — and they are
+      already compile-checked by the tests that use them); `TestShutdown`
+      (`Shutdown()` returns nothing and has no observable Go-level contract, and
+      the only property one could assert, that the library still works
+      afterwards, was exactly the mid-suite teardown being removed); and the
+      `NewBuffer(1 GB)` case (its own log accepted both outcomes, so it had no
+      failing case, and it allocated a gigabyte in CI to reach it).
+      The rest became assertions against the Fake backend: the exact identity and
+      geometry — which doubles as the regression test for the P0 32/64-bit
+      out-param bug — parameter round-trips, `*Fast`/standard equality, the
+      fresh-buffer contract (status `CLEARED`, empty payload, one part, no
+      chunks), byte-for-byte agreement between `GetData`, `GetDataSlice`,
+      `GetDataInto` and `GetDataUnsafe` on a seeded payload, and — the largest
+      gain — `EnableInterface`/`DisableInterface` actually changing what
+      `UpdateDeviceList` finds, where the old test only checked that the calls
+      returned.
+      One test was actively harmful rather than merely useless: the old
+      `TestBufferMultipart` called `GetPartWidth`/`GetPartHeight` on a fresh
+      buffer, whose part is not an image, tripping
+      `assertion 'arv_buffer_part_is_image' failed` twice and logging the
+      resulting 0 as a result. Run against a seeded buffer the accessors are
+      assertable. `go test ./... 2>&1 | grep -c CRITICAL` went from 2 to 0, and
+      that check is now part of the verification routine.
+      Three contracts were deliberately *not* asserted, because Aravis does not
+      offer them: `GetDeviceId`/`GetInterfaceId` past the end return a nil error
+      (that result is cgo's `errno`, see P6), so only the empty string is
+      asserted; the Fake camera exposes no `ExposureTime`/`Gain` GenICam node, so
+      the corresponding `*Fast` accessors are probed and skipped rather than
+      pinning a backend quirk as this binding's contract; and
+      `NewCamera("")`/`OpenDevice("")` still skip, for the reason recorded under
+      P1.
+- [ ] **Introduce a seam over the C calls** so a genuine fake can be injected.
+      **Deferred, not resolved.** In the meantime Aravis's built-in Fake
+      interface serves as the explicit test seam: `tests/fake_test.go`'s
+      `TestMain` enables it and disables the GigE and USB3 interfaces, so
+      discovery is deterministic (exactly one device), hermetic (a camera on the
+      developer's machine cannot change an assertion) and fast (`./tests` went
+      from ~37 s to ~6 s). It hard-fails rather than skipping when Fake is
+      unreachable, since Fake ships in every libaravis 0.8 build and a green run
+      full of skips is the false signal this phase exists to remove.
+      `ARAVIS_TEST_HARDWARE=1` keeps the real interfaces enabled, and in that
+      mode the acquisition tests bind to the first non-Fake device and fail when
+      none is attached — otherwise `make test-integration` would report success
+      on hardware coverage it never exercised (raised in PR review).
+      What that does *not* give is error-path injection: there is no way to make
+      `arv_camera_set_region` fail on demand. Weigh that against the cost — a Go
+      interface over the ~180 cgo calls would have to be threaded through every
+      wrapper type and constructor, a breaking change across ~110 methods — and
+      against the fact that the bugs this repository actually had (pointer
+      widths, `GError` versus `errno`, unref counts, NULL sentinels) live in the
+      layer such a seam would replace, so a mock would have passed every one of
+      them. Left open deliberately; `mock_test.go`, the file this item named, is
+      gone either way.
+- [x] **Add `-race` tests.** `SetControlLostHandler` is hammered by concurrent
+      installs and removals across copies of a real Fake camera
+      (`tests/lifecycle_test.go`), and `closeFlag.claim` by 64 concurrent closers
+      (`lifecycle_test.go` in the root package). `getCachedCString` no longer has
+      a race to test: the cache became write-once under P2, so its mutex is gone,
+      and `CleanupPerformanceCache` no longer exists. `-race` is no longer
+      optional — `make test-unit`, `make test-short` and `make test-coverage` all
+      pass it.
+- [x] **Fix `TimeoutPopBuffer(1000)` unit bug** in `buffer_test.go`. The literal
+      was 1000 ns (1 µs), not the "1 second" the comment claimed, because the
+      wrapper divides a `time.Duration` by 1000 to reach Aravis's microseconds —
+      so the pop always timed out and the test returned early without ever
+      reaching the data accessors. The surrounding `t.Logf("timeout expected")`
+      is what kept it invisible. The call now goes through the shared
+      `seededBuffer` helper with a `time.Duration`-typed constant, and every
+      remaining call site passes a typed duration.
+- [x] **Stop advertising unrunnable benchmarks.** All six skipped without
+      hardware, so none had ever run in CI, and the buffer ones measured an
+      unfilled `NewBuffer` — received size zero, i.e. the early return — so their
+      numbers described nothing. That is why P3 had to delete every published
+      figure. They now run on Fake-seeded buffers, report bytes and allocations,
+      and `make benchmark` no longer ends in `|| echo`, so a broken benchmark
+      fails the build. Two pairs were exact duplicates across `buffer_test.go`
+      and `performance_test.go` and were merged. Every benchmark probes before
+      timing: one whose every iteration fails otherwise reads as an exceptionally
+      fast one, and the exposure/gain fast paths skip on Fake rather than timing
+      a `feature not found` error.
+      The numbers independently confirm the one quantitative claim
+      `PERFORMANCE.md` still makes — `GetDataInto` at 0 allocs/op against
+      `GetData` at 262144 B/op — but none are published: figures from a shared CI
+      runner are not comparable across runs, which is the point that document
+      already makes.
+
+Also fixed along the way, since they were what made the suite's coverage claim
+hollow: `make test-unit` carried a hand-maintained 19-alternative `-run`
+allowlist that silently omitted every hardware-free test added after it was
+written, and `make test-coverage` measured `[no statements]` — `tests` is an
+*external* test package with no non-test code, so without `-coverpkg` the
+profile instrumented nothing, and running only `./tests/` excluded the
+root-package tests entirely. Coverage now reports 35.5% of the library. CI also
+gained a guard that fails on any undocumented skip, since a skip is precisely
+the silence this phase removed.
 
 ### P6 — Correctness bugs found while documenting (new, not yet fixed)
 
@@ -307,7 +407,10 @@ behavior is wrong. Ordered by severity.
 
 1. P0 correctness bugs (safety) — done
 2. P4 build/CI (so changes are verifiable) — done
-3. P5 pure-Go tests (lock in behavior) — partly done
+3. P5 pure-Go tests (lock in behavior) — done
 4. P1/P2 API + perf machinery — done
 5. P3 docs (describe the now-true reality) — done
-6. P6 correctness bugs surfaced by the P3 doc pass, then the rest of P5
+6. P5 tests (make the suite mean something) — done, except the deferred
+   C-call seam
+7. P6 correctness bugs surfaced by the P3 doc pass — next. The suite that
+   lands them is now one that can fail.

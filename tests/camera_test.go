@@ -1,296 +1,332 @@
 package tests
 
 import (
+	"math"
 	"testing"
 
 	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
-// TestCameraCreationWithoutDevice tests camera creation with invalid device.
-func TestCameraCreationWithoutDevice(t *testing.T) {
-	// Test with non-existent device
-	_, err := aravis.NewCamera("nonexistent-device-12345")
+// The Fake camera's fixed identity and geometry. These are properties of
+// Aravis's built-in backend, not of this binding, which is what makes them
+// usable as expected values.
+const (
+	fakeVendor = "Aravis"
+	fakeModel  = "Fake"
+	fakeSerial = "1"
+
+	fakeWidth  = 512
+	fakeHeight = 512
+	// The sensor is larger than the default region: Fake reports a 2048x2048
+	// sensor and streams a 512x512 window out of it.
+	fakeSensorWidth  = 2048
+	fakeSensorHeight = 2048
+	// Mono8, so one byte per pixel.
+	fakePayloadSize = fakeWidth * fakeHeight
+
+	fakeFrameRate    = 25.0
+	fakeExposureTime = 10000.0
+)
+
+// TestNewCameraRejectsUnknownDevice covers the failure path. The old version
+// logged both outcomes, so it passed whether NewCamera returned an error or
+// not, and it never checked the camera it got back.
+//
+// The error text comes from GLib, so only its presence is asserted.
+func TestNewCameraRejectsUnknownDevice(t *testing.T) {
+	camera, err := aravis.NewCamera("nonexistent-device-12345")
 	if err == nil {
-		t.Log("Creating camera with non-existent device returned nil error (may be expected)")
-	} else {
-		t.Logf("Creating camera with non-existent device returned error: %v", err)
+		t.Fatal("NewCamera(nonexistent) returned a nil error; want a failure")
 	}
 
-	// Test with empty device name
-	_, err = aravis.NewCamera("")
-	if err == nil {
-		t.Log("Creating camera with empty device name returned nil error (may be expected)")
-	} else {
-		t.Logf("Creating camera with empty device name returned error: %v", err)
+	if !camera.IsNil() {
+		t.Error("NewCamera(nonexistent) returned a non-nil camera alongside an error")
 	}
 }
 
-// TestCameraWithRealDevice tests camera operations with actual connected cameras.
-func TestCameraWithRealDevice(t *testing.T) {
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
+// TestNewCameraFirstAvailable exercises the NULL sentinel: since P1 an empty id
+// means "first available device" rather than a device literally named "".
+//
+// This mirrors TestOpenDeviceFirstAvailable, and skips for the same reason:
+// Aravis's Fake backend does not implement the first-device lookup, so
+// arv_camera_new(NULL) reports "device not found" even while the interface
+// enumerates Fake_1. Asserting the error instead would pin a backend
+// limitation as if it were this binding's contract.
+func TestNewCameraFirstAvailable(t *testing.T) {
+	camera, err := aravis.NewCamera("")
 	if err != nil {
-		t.Fatalf("Failed to get device count: %v", err)
+		t.Skipf("NewCamera(\"\") = %v; no backend here implements the first-device lookup", err)
 	}
 
-	if numDevices == 0 {
-		t.Skip("No cameras connected, skipping real camera tests")
-		return
-	}
-
-	// Get first device
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Fatalf("Failed to get device ID: %v", err)
-	}
-
-	// Create camera
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		t.Fatalf("Failed to create camera: %v", err)
-	}
 	defer camera.Close()
 
-	t.Logf("Successfully created camera for device: %s", deviceId)
-
-	// Test basic camera information
-	vendor, err := camera.GetVendorName()
-	if err == nil {
-		t.Logf("Vendor: %s", vendor)
+	if model, err := camera.GetModelName(); err != nil || model != fakeModel {
+		t.Errorf("GetModelName() = %q, %v; want %q, nil", model, err, fakeModel)
 	}
-
-	model, err := camera.GetModelName()
-	if err == nil {
-		t.Logf("Model: %s", model)
-	}
-
-	serial, err := camera.GetDeviceSerialNumber()
-	if err == nil {
-		t.Logf("Serial: %s", serial)
-	}
-
-	// Test sensor information
-	testCameraSensorInfo(t, camera)
-
-	// Test performance methods
-	testCameraPerformanceMethods(t, camera)
 }
 
-func testCameraSensorInfo(t *testing.T, camera aravis.Camera) {
-	// Test getting sensor size
+// TestFakeCameraIdentity asserts the strings the identity accessors return.
+// Exact values are right here: the backend is fixed, and an empty or garbled
+// string is exactly how the C.GoString wrappers fail.
+func TestFakeCameraIdentity(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
+	tests := []struct {
+		name string
+		got  func() (string, error)
+		want string
+	}{
+		{"GetVendorName", camera.GetVendorName, fakeVendor},
+		{"GetModelName", camera.GetModelName, fakeModel},
+		{"GetDeviceSerialNumber", camera.GetDeviceSerialNumber, fakeSerial},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.got()
+			if err != nil {
+				t.Fatalf("%s() returned error: %v", tt.name, err)
+			}
+
+			if got != tt.want {
+				t.Errorf("%s() = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFakeCameraGeometry is the regression test for the P0 out-param bug: these
+// accessors declared Go int locals (8 bytes) and handed Aravis a *C.gint, which
+// writes 4, so the upper half kept whatever was on the stack. On a
+// little-endian machine the low half still read correctly, which is why the old
+// log-only version never noticed; a wrong value here is now a failure.
+func TestFakeCameraGeometry(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
 	width, err := camera.GetWidth()
-	if err == nil {
-		t.Logf("Width: %d", width)
+	if err != nil {
+		t.Fatalf("GetWidth() returned error: %v", err)
+	}
+
+	if width != fakeWidth {
+		t.Errorf("GetWidth() = %d, want %d", width, fakeWidth)
 	}
 
 	height, err := camera.GetHeight()
-	if err == nil {
-		t.Logf("Height: %d", height)
+	if err != nil {
+		t.Fatalf("GetHeight() returned error: %v", err)
 	}
 
-	// Test getting region
-	x, y, width2, height2, err := camera.GetRegion()
-	if err == nil {
-		t.Logf("Region: x=%d, y=%d, width=%d, height=%d", x, y, width2, height2)
+	if height != fakeHeight {
+		t.Errorf("GetHeight() = %d, want %d", height, fakeHeight)
 	}
 
-	// Test exposure time
-	exposure, err := camera.GetExposureTime()
-	if err == nil {
-		t.Logf("Exposure time: %.2f μs", exposure)
+	sensorWidth, sensorHeight, err := camera.GetSensorSize()
+	if err != nil {
+		t.Fatalf("GetSensorSize() returned error: %v", err)
 	}
 
-	// Test gain
-	gain, err := camera.GetGain()
-	if err == nil {
-		t.Logf("Gain: %.2f", gain)
+	if sensorWidth != fakeSensorWidth || sensorHeight != fakeSensorHeight {
+		t.Errorf("GetSensorSize() = %dx%d, want %dx%d",
+			sensorWidth, sensorHeight, fakeSensorWidth, fakeSensorHeight)
 	}
 
-	// Test frame rate
-	fps, err := camera.GetFrameRate()
-	if err == nil {
-		t.Logf("Frame rate: %.2f FPS", fps)
+	x, y, regionWidth, regionHeight, err := camera.GetRegion()
+	if err != nil {
+		t.Fatalf("GetRegion() returned error: %v", err)
 	}
 
-	// Test payload size
+	if x != 0 || y != 0 || regionWidth != fakeWidth || regionHeight != fakeHeight {
+		t.Errorf("GetRegion() = (%d,%d,%d,%d), want (0,0,%d,%d)",
+			x, y, regionWidth, regionHeight, fakeWidth, fakeHeight)
+	}
+
 	payloadSize, err := camera.GetPayloadSize()
-	if err == nil {
-		t.Logf("Payload size: %d bytes", payloadSize)
+	if err != nil {
+		t.Fatalf("GetPayloadSize() returned error: %v", err)
+	}
+
+	if payloadSize != fakePayloadSize {
+		t.Errorf("GetPayloadSize() = %d, want %d (Mono8 over %dx%d)",
+			payloadSize, fakePayloadSize, fakeWidth, fakeHeight)
 	}
 }
 
-func testCameraPerformanceMethods(t *testing.T, camera aravis.Camera) {
-	// Test fast methods
-	width, err := camera.GetWidthFast()
-	if err == nil {
-		t.Logf("Width (fast): %d", width)
-	}
-
-	height, err := camera.GetHeightFast()
-	if err == nil {
-		t.Logf("Height (fast): %d", height)
-	}
-
-	exposure, err := camera.GetExposureTimeFast()
-	if err == nil {
-		t.Logf("Exposure (fast): %.2f μs", exposure)
-	}
-
-	gain, err := camera.GetGainFast()
-	if err == nil {
-		t.Logf("Gain (fast): %.2f", gain)
-	}
-}
-
-// TestCameraSettings tests camera parameter setting.
-func TestCameraSettings(t *testing.T) {
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		t.Skip("No cameras connected, skipping camera settings tests")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Skip("Failed to get device ID")
-		return
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		t.Skip("Failed to create camera")
-		return
-	}
+// TestFastAccessorsMatchStandard pins the contract the *Fast methods actually
+// have: they are a shortcut to the same value, not a different reading. The old
+// version logged "succeeded" or "may not be supported" and checked neither.
+func TestFastAccessorsMatchStandard(t *testing.T) {
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
-	// Test setting acquisition mode
-	err = camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS)
-	if err != nil {
-		t.Logf("Setting acquisition mode failed: %v (may not be supported)", err)
+	intPairs := []struct {
+		name               string
+		standard, fastCall func() (int, error)
+	}{
+		{"Width", camera.GetWidth, camera.GetWidthFast},
+		{"Height", camera.GetHeight, camera.GetHeightFast},
 	}
 
-	// Test frame rate setting (be conservative)
-	originalFPS, err := camera.GetFrameRate()
-	if err == nil {
-		testFPS := originalFPS * 0.5 // Set to half the current rate
+	for _, tt := range intPairs {
+		t.Run(tt.name, func(t *testing.T) {
+			want, err := tt.standard()
+			if err != nil {
+				t.Fatalf("Get%s() returned error: %v", tt.name, err)
+			}
 
-		err = camera.SetFrameRate(testFPS)
-		if err == nil {
-			// Restore original
-			camera.SetFrameRate(originalFPS)
-			t.Logf("Frame rate setting test successful")
-		} else {
-			t.Logf("Frame rate setting failed: %v (may not be supported)", err)
-		}
+			got, err := tt.fastCall()
+			if err != nil {
+				t.Fatalf("Get%sFast() returned error: %v", tt.name, err)
+			}
+
+			if got != want {
+				t.Errorf("Get%sFast() = %d, Get%s() = %d; the fast path must read the same value",
+					tt.name, got, tt.name, want)
+			}
+		})
 	}
 
-	// Test exposure time setting (be conservative)
-	originalExposure, err := camera.GetExposureTime()
-	if err == nil && originalExposure > 0 {
-		testExposure := originalExposure * 1.1 // Slightly increase exposure
+	// The Fast float accessors address the fixed "ExposureTime" and "Gain"
+	// GenICam nodes (performance.go), while arv_camera_get_exposure_time also
+	// accepts "ExposureTimeAbs". Aravis's Fake camera implements only the
+	// latter, so these report "feature not found" against it. That is a
+	// property of the Fake device description, not of this binding, so they are
+	// probed and skipped rather than asserting Fake's feature set.
+	floatPairs := []struct {
+		name               string
+		standard, fastCall func() (float64, error)
+	}{
+		{"ExposureTime", camera.GetExposureTime, camera.GetExposureTimeFast},
+		{"Gain", camera.GetGain, camera.GetGainFast},
+	}
 
-		err = camera.SetExposureTime(testExposure)
-		if err == nil {
-			// Restore original
-			camera.SetExposureTime(originalExposure)
-			t.Logf("Exposure time setting test successful")
-		} else {
-			t.Logf("Exposure time setting failed: %v (may not be supported)", err)
-		}
+	for _, tt := range floatPairs {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.fastCall()
+			if err != nil {
+				t.Skipf("Get%sFast() = %v; this camera exposes no matching GenICam node", tt.name, err)
+			}
+
+			want, err := tt.standard()
+			if err != nil {
+				t.Fatalf("Get%s() returned error: %v", tt.name, err)
+			}
+
+			if got != want {
+				t.Errorf("Get%sFast() = %v, Get%s() = %v", tt.name, got, tt.name, want)
+			}
+		})
 	}
 }
 
-// TestCameraStreamCreation tests creating camera streams.
+// TestCameraSettingsRoundTrip asserts that what was set is what comes back. The
+// old version logged "setting failed (may not be supported)" on every error
+// path and never compared the value it read against the one it wrote.
+func TestCameraSettingsRoundTrip(t *testing.T) {
+	camera := requireFakeCamera(t)
+	defer camera.Close()
+
+	t.Run("acquisition mode", func(t *testing.T) {
+		if err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS); err != nil {
+			t.Errorf("SetAcquisitionMode(CONTINUOUS) returned error: %v", err)
+		}
+	})
+
+	t.Run("frame rate", func(t *testing.T) {
+		original, err := camera.GetFrameRate()
+		if err != nil {
+			t.Fatalf("GetFrameRate() returned error: %v", err)
+		}
+
+		if original != fakeFrameRate {
+			t.Errorf("GetFrameRate() = %v, want the Fake default of %v", original, fakeFrameRate)
+		}
+
+		t.Cleanup(func() { _ = camera.SetFrameRate(original) })
+
+		const want = 10.0
+
+		if err := camera.SetFrameRate(want); err != nil {
+			t.Fatalf("SetFrameRate(%v) returned error: %v", want, err)
+		}
+
+		got, err := camera.GetFrameRate()
+		if err != nil {
+			t.Fatalf("GetFrameRate() returned error: %v", err)
+		}
+
+		if math.Abs(got-want) > 0.001 {
+			t.Errorf("GetFrameRate() = %v after SetFrameRate(%v)", got, want)
+		}
+	})
+
+	t.Run("exposure time", func(t *testing.T) {
+		original, err := camera.GetExposureTime()
+		if err != nil {
+			t.Fatalf("GetExposureTime() returned error: %v", err)
+		}
+
+		if original != fakeExposureTime {
+			t.Errorf("GetExposureTime() = %v, want the Fake default of %v", original, fakeExposureTime)
+		}
+
+		t.Cleanup(func() { _ = camera.SetExposureTime(original) })
+
+		want := original * 2
+
+		if err := camera.SetExposureTime(want); err != nil {
+			t.Fatalf("SetExposureTime(%v) returned error: %v", want, err)
+		}
+
+		got, err := camera.GetExposureTime()
+		if err != nil {
+			t.Fatalf("GetExposureTime() returned error: %v", err)
+		}
+
+		if math.Abs(got-want) > 0.001 {
+			t.Errorf("GetExposureTime() = %v after SetExposureTime(%v)", got, want)
+		}
+	})
+}
+
+// TestCameraStreamCreation checks that CreateStream hands back a live stream.
+// The old version logged "Stream created successfully" and then assigned
+// ThreadPriority twice, logging each assignment; a struct field assignment has
+// no contract of its own. The field is exercised here for what it actually
+// does, which is to be read by the next CreateStream call.
 func TestCameraStreamCreation(t *testing.T) {
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		t.Skip("No cameras connected, skipping stream creation tests")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Skip("Failed to get device ID")
-		return
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		t.Skip("Failed to create camera")
-		return
-	}
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
-	// Test stream creation
 	stream, err := camera.CreateStream()
 	if err != nil {
-		t.Fatalf("Failed to create stream: %v", err)
+		t.Fatalf("CreateStream() returned error: %v", err)
 	}
+
 	defer stream.Close()
 
-	t.Log("Stream created successfully")
+	if stream.IsNil() {
+		t.Fatal("CreateStream() returned a nil stream")
+	}
 
-	// Test thread priority settings
-	camera.ThreadPriority = aravis.ThreadPriorityNormal
+	if stream.IsClosed() {
+		t.Error("CreateStream() returned an already-closed stream")
+	}
 
-	t.Log("Set thread priority to normal")
-
+	// Realtime priority is deliberately not exercised: it needs privileges CI
+	// does not have.
 	camera.ThreadPriority = aravis.ThreadPriorityHigh
 
-	t.Log("Set thread priority to high")
-
-	// Don't test realtime priority as it requires special permissions
-}
-
-// BenchmarkCameraParameterAccess benchmarks parameter access performance.
-func BenchmarkCameraParameterAccess(b *testing.B) {
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		b.Skip("No cameras connected, skipping benchmarks")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
+	highPriority, err := camera.CreateStream()
 	if err != nil {
-		b.Skip("Failed to get device ID")
-		return
+		t.Fatalf("CreateStream() with ThreadPriorityHigh returned error: %v", err)
 	}
 
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		b.Skip("Failed to create camera")
-		return
+	defer highPriority.Close()
+
+	if highPriority.IsNil() {
+		t.Error("CreateStream() with ThreadPriorityHigh returned a nil stream")
 	}
-	defer camera.Close()
-
-	b.Run("StandardWidth", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetWidth()
-		}
-	})
-
-	b.Run("FastWidth", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetWidthFast()
-		}
-	})
-
-	b.Run("StandardExposure", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetExposureTime()
-		}
-	})
-
-	b.Run("FastExposure", func(b *testing.B) {
-		for range b.N {
-			_, _ = camera.GetExposureTimeFast()
-		}
-	})
 }

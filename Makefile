@@ -87,36 +87,58 @@ test-all: ## Run all tests including integration
 	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./...
 	@echo "$(GREEN)✓ All tests completed$(NC)"
 
-test-unit: ## Run unit tests only (mock/stub tests)
+# Every test in this repository runs against Aravis's built-in Fake backend
+# (see tests/fake_test.go), so "unit" is simply the whole suite: no camera, no
+# allowlist. The hand-maintained -run regex this target used to carry silently
+# omitted every hardware-free test added after it was written.
+test-unit: ## Run the full hardware-free suite (Fake backend)
 	@echo "$(BOLD)Running unit tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... -run "TestMock|TestError|TestNewAravisError|TestStructural|TestConstants|TestBoundary|TestToBool|TestGetDataInto|TestGetCachedCString|TestCStringCache|TestBayer|TestCloseFlag|TestCloseOnZeroValue|TestCameraCloseUnrefs|TestStreamCloseUnrefs|TestOwnedDeviceClose|TestOpenDeviceFirstAvailable|TestBorrowedDevice|TestSetControlLostHandler|TestGetNumInterface"
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -race ./...
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
-test-integration: ## Run integration tests (requires camera)
+# ARAVIS_TEST_HARDWARE makes requireStreamingCamera select the first non-Fake
+# device and fail when there is none, so this target cannot report success
+# without having driven a physical camera. TestMultipleDevices additionally
+# needs two of them and skips otherwise.
+test-integration: ## Run against real hardware (requires a connected camera)
 	@echo "$(BOLD)Running integration tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/ -run "TestFull|TestStreaming|TestMultiple"
+	@ARAVIS_TEST_HARDWARE=1 CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/ \
+		-run "TestFullWorkflow|TestStreamingPerformance|TestMultipleDevices"
 	@echo "$(GREEN)✓ Integration tests completed$(NC)"
 
 test-short: ## Run short tests only
 	@echo "$(BOLD)Running short tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v -short ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -short -race ./...
 	@echo "$(GREEN)✓ Short tests completed$(NC)"
 
+# -coverpkg is what makes this report anything: ./tests is an *external* test
+# package with no non-test code of its own, so without it the profile
+# instruments nothing. ./... also picks up the root-package tests, which the
+# old ./tests/-only invocation excluded from the report entirely.
 test-coverage: ## Run tests with coverage
 	@echo "$(BOLD)Running tests with coverage...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v -race -coverprofile=coverage.out ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -race \
+		-coverpkg=$(MODULE_NAME) -coverprofile=coverage.out ./...
 	@$(GO) tool cover -html=coverage.out -o coverage.html
+	@$(GO) tool cover -func=coverage.out | tail -1
 	@echo "$(GREEN)✓ Coverage report generated: coverage.html$(NC)"
+
+# -run '^$$' keeps -bench from re-running the whole test suite alongside the
+# benchmarks. BENCHTIME is overridable so CI can execute every benchmark body
+# in a few seconds (BENCHTIME=10x) without pretending the timings are
+# comparable across runners.
+BENCHTIME ?= 1s
+BENCH_FLAGS := -benchmem -run '^$$' -benchtime=$(BENCHTIME)
 
 benchmark: ## Run benchmarks
 	@echo "$(BOLD)Running benchmarks...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=. -benchmem ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=. $(BENCH_FLAGS) ./tests/
 
 benchmark-performance: ## Run performance benchmarks only
 	@echo "$(BOLD)Running performance benchmarks...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkParameter -benchmem ./tests/
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkBuffer -benchmem ./tests/
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkCombined -benchmem ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkParameter $(BENCH_FLAGS) ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkBuffer $(BENCH_FLAGS) ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -bench=BenchmarkCombined $(BENCH_FLAGS) ./tests/
 
 fmt: ## Format code
 	@echo "$(BOLD)Formatting code...$(NC)"
