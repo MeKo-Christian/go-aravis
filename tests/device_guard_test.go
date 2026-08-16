@@ -122,6 +122,68 @@ func TestZeroValueDeviceMethods(t *testing.T) {
 	}
 }
 
+// TestClosedOwnedDeviceMethods covers the second half of the receiver guard,
+// raised in review: Close drops the reference but leaves the pointer in the
+// struct, so a nil check alone still let every method hand Aravis a freed
+// ArvDevice — a dangling pointer no assertion inside the library catches.
+func TestClosedOwnedDeviceMethods(t *testing.T) {
+	device, err := aravis.OpenDevice(fakeDeviceID)
+	if err != nil {
+		t.Fatalf("OpenDevice(%s) returned error: %v", fakeDeviceID, err)
+	}
+
+	device.Close()
+
+	if !device.IsClosed() {
+		t.Fatal("the device does not report itself closed after Close")
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"TakeControl", func() error { _, err := device.TakeControl(); return err }},
+		{"GetStringFeatureValue", func() error { _, err := device.GetStringFeatureValue("Width"); return err }},
+		{"SetIntegerFeatureValue", func() error { return device.SetIntegerFeatureValue("Width", 512) }},
+		{"ExecuteCommand", func() error { return device.ExecuteCommand("AcquisitionStart") }},
+		{"ReadMemory", func() error { _, err := device.ReadMemory(0x0, 4); return err }},
+		{"ReadRegister", func() error { _, err := device.ReadRegister(0x0); return err }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); err == nil {
+				t.Errorf("%s on a closed Device returned nil error; want an error", tc.name)
+			}
+		})
+	}
+}
+
+// TestClosedCameraDeviceAccess is the same point one level up, also raised in
+// review: Camera.Close unrefs the camera but leaves c.camera set, so both
+// methods used to reach Aravis with a freed ArvCamera.
+func TestClosedCameraDeviceAccess(t *testing.T) {
+	camera := requireFakeCamera(t)
+	camera.Close()
+
+	if !camera.IsClosed() {
+		t.Fatal("the camera does not report itself closed after Close")
+	}
+
+	device, err := camera.GetDevice()
+	if err == nil {
+		t.Error("GetDevice() on a closed camera returned nil error; want an error")
+	}
+
+	if !device.IsNil() {
+		t.Error("GetDevice() on a closed camera returned a non-nil device")
+	}
+
+	if _, err := camera.IsGVDevice(); err == nil {
+		t.Error("IsGVDevice() on a closed camera returned nil error; want an error")
+	}
+}
+
 // TestGetDeviceOnFakeCamera is the positive control for the guards above: they
 // must not pass by rejecting everything. A camera's device is borrowed, so it
 // comes back usable, with a nil error, and must not be closed by the caller —

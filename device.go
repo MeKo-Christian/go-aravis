@@ -186,14 +186,24 @@ func (d *Device) IsClosed() bool {
 	return d.device == nil || d.owned.isClosed()
 }
 
-// check reports whether this Device may be handed to Aravis. Every method that
-// dereferences the underlying pointer calls it first: Aravis asserts on a NULL
-// ArvDevice, which at best logs a GLib CRITICAL and at worst — for the
-// GigE-only control calls, whose cast check the compiler optimises away —
-// crashes the process.
+// check reports whether this Device may be handed to Aravis. Every method in
+// this file that dereferences the underlying pointer calls it first: Aravis
+// asserts on a NULL ArvDevice, which at best logs a GLib CRITICAL and at worst
+// — for the GigE-only control calls, whose cast check the compiler optimises
+// away — crashes the process.
+//
+// A closed device is rejected too. Close drops the reference but leaves the
+// pointer in place, so after it the field is not NULL but dangling, which is
+// worse than NULL: Aravis has no assertion that catches it. Only an owned
+// device can be closed here; a device borrowed from [Camera.GetDevice] has no
+// close flag of its own and stays usable for as long as its camera does.
 func (d *Device) check() error {
 	if d == nil || d.device == nil {
 		return errors.New("device is nil")
+	}
+
+	if d.IsClosed() {
+		return errors.New("aravis: device is closed")
 	}
 
 	return nil

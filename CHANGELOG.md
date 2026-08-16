@@ -100,8 +100,10 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
 - **`Camera.GetDevice` and `Camera.IsGVDevice` always returned a nil error,** and
   `GetDevice` never checked `arv_camera_get_device` for NULL, so a caller could receive a
   `Device` wrapping nothing with no indication anything had failed. Both now return a real
-  error, and every `Device` method nil-guards its receiver instead of passing NULL to
-  Aravis, which asserted and logged a CRITICAL.
+  error, and every `Device` method in `device.go` guards its receiver against a nil *and* a
+  closed device instead of passing NULL — or, after `Close`, a dangling pointer — to
+  Aravis, which asserted and logged a CRITICAL. The `*Fast` accessors in `performance.go`
+  still need the same guard; that file belongs to a parallel P6 change.
 - `GetDataSlice` no longer uses the deprecated `reflect.SliceHeader`.
 - **`get_image` example error handling**: `http.Error` calls fell through instead of
   returning, `TimeoutPopBuffer`'s error went unchecked, and a bad-status branch

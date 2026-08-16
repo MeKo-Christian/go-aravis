@@ -392,10 +392,17 @@ behavior is wrong. Ordered by severity.
       reaches Aravis.
       **Fixed.** Both methods now guard the camera and check the result, returning the
       house `errors.New` messages the rest of the package uses — no sentinels, which are
-      the separate error-contract item. Every `Device` method that dereferences the
-      underlying pointer calls a shared `check()` first, so the fourteen that used to hand
-      Aravis a NULL and collect an `ARV_IS_DEVICE` assertion now return an error. A
-      positive control against Fake keeps the guards from passing by rejecting everything.
+      the separate error-contract item. Every `Device` method in `device.go` calls a shared
+      `check()` first, so the fourteen that used to hand Aravis a NULL and collect an
+      `ARV_IS_DEVICE` assertion now return an error. A positive control against Fake keeps
+      the guards from passing by rejecting everything.
+      Review added the closed case to all three guards: `Close` drops the reference but
+      leaves the pointer in the struct, so a bare nil check still let a closed camera or
+      device reach Aravis with a dangling pointer — which no assertion inside the library
+      catches. `Camera.IsClosed`/`Device.IsClosed` consult the shared close flag, so they
+      are what the guards ask. Still open, and left to the `performance.go` change so the
+      two do not collide: the six `*Fast` accessors are `Device` methods too and carry no
+      guard at all.
 - [ ] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
       both as a freshly allocated `errors.New("aravis returned a null pointer")`, which
       is non-comparable, so callers cannot use `errors.Is` to detect a dropped frame.

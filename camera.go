@@ -250,7 +250,10 @@ func (c *Camera) CreateStream() (Stream, error) {
 func (c *Camera) GetDevice() (Device, error) {
 	var d Device
 
-	if c.camera == nil {
+	// IsClosed, not a bare nil check: Close unrefs the camera but leaves
+	// c.camera set, so a nil check alone would hand the freed pointer to
+	// Aravis. The shared close flag is the only thing that knows.
+	if c.IsClosed() {
 		return Device{}, errors.New("aravis: camera is closed")
 	}
 
@@ -1050,7 +1053,7 @@ func (c *Camera) GetPayloadSize() (uint, error) {
 // answer the question and returns an error rather than the false a real
 // non-GigE camera returns.
 func (c *Camera) IsGVDevice() (bool, error) {
-	if c.camera == nil {
+	if c.IsClosed() {
 		return false, errors.New("aravis: camera is closed")
 	}
 
