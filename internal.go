@@ -4,10 +4,6 @@ package aravis
 // #include <arv.h>
 import "C"
 
-import (
-	"sync"
-)
-
 func toBool(x C.gboolean) bool {
 	if int(x) != 0 {
 		return true
@@ -16,24 +12,18 @@ func toBool(x C.gboolean) bool {
 	}
 }
 
-// Error pool to reduce allocations for common errors
-var (
-	errorPool = sync.Pool{
-		New: func() interface{} {
-			return &AravisError{}
-		},
-	}
-
-	// Common pre-allocated errors to avoid string allocations
-	commonErrors = map[C.int]*AravisError{
-		C.ARV_DEVICE_ERROR_TIMEOUT:           {Code: int(C.ARV_DEVICE_ERROR_TIMEOUT), Message: "device timeout"},
-		C.ARV_DEVICE_ERROR_NOT_FOUND:         {Code: int(C.ARV_DEVICE_ERROR_NOT_FOUND), Message: "device not found"},
-		C.ARV_DEVICE_ERROR_NOT_CONNECTED:     {Code: int(C.ARV_DEVICE_ERROR_NOT_CONNECTED), Message: "device not connected"},
-		C.ARV_DEVICE_ERROR_PROTOCOL_ERROR:    {Code: int(C.ARV_DEVICE_ERROR_PROTOCOL_ERROR), Message: "protocol error"},
-		C.ARV_DEVICE_ERROR_TRANSFER_ERROR:    {Code: int(C.ARV_DEVICE_ERROR_TRANSFER_ERROR), Message: "transfer error"},
-		C.ARV_DEVICE_ERROR_FEATURE_NOT_FOUND: {Code: int(C.ARV_DEVICE_ERROR_FEATURE_NOT_FOUND), Message: "feature not found"},
-	}
-)
+// errorMessages is a lookup table mapping known Aravis device error codes to
+// stable, human readable messages. It holds only immutable strings and never
+// stores or hands out error values: every error returned to a caller is freshly
+// allocated, so a caller can never mutate shared package state.
+var errorMessages = map[int]string{
+	int(C.ARV_DEVICE_ERROR_TIMEOUT):           "device timeout",
+	int(C.ARV_DEVICE_ERROR_NOT_FOUND):         "device not found",
+	int(C.ARV_DEVICE_ERROR_NOT_CONNECTED):     "device not connected",
+	int(C.ARV_DEVICE_ERROR_PROTOCOL_ERROR):    "protocol error",
+	int(C.ARV_DEVICE_ERROR_TRANSFER_ERROR):    "transfer error",
+	int(C.ARV_DEVICE_ERROR_FEATURE_NOT_FOUND): "feature not found",
+}
 
 // AravisError provides structured error information with error code
 type AravisError struct {
@@ -45,28 +35,19 @@ func (e *AravisError) Error() string {
 	return e.Message
 }
 
-func (e *AravisError) Reset() {
-	e.Code = 0
-	e.Message = ""
+// newAravisError builds a caller-owned error for an Aravis error code. Known
+// codes get a stable message from errorMessages; anything else keeps the
+// message GLib produced. Never returns shared package state.
+func newAravisError(code int, glibMessage string) *AravisError {
+	if msg, ok := errorMessages[code]; ok {
+		return &AravisError{Code: code, Message: msg}
+	}
+	return &AravisError{Code: code, Message: glibMessage}
 }
 
 func errorFromGError(gerr *C.GError) error {
 	defer C.g_error_free(gerr)
-
-	// Check if this is a common error we can reuse
-	if commonErr, exists := commonErrors[gerr.code]; exists {
-		return commonErr
-	}
-
-	// For uncommon errors, use the pool to reduce allocations
-	pooledErr := errorPool.Get().(*AravisError)
-	pooledErr.Code = int(gerr.code)
-	pooledErr.Message = goString(gerr.message)
-
-	// Note: We don't put the error back in the pool immediately because
-	// the caller might keep a reference to it. The GC will handle cleanup.
-
-	return pooledErr
+	return newAravisError(int(gerr.code), goString(gerr.message))
 }
 
 func goString(cstr *C.gchar) string {
