@@ -134,12 +134,20 @@
 //		// ...
 //	}
 //
-// Not every error is one of those, so errors.As is not guaranteed to match and a
-// caller must handle the plain-error case too. One other kind reaches callers today:
+// Everything the package decides for itself — a pop that timed out, a nil or closed
+// handle, an out-of-range part index — is reported as one of the package-level
+// sentinels in errors.go, matched with errors.Is:
 //
-//   - The pop methods report an empty result as a plain error, so a timeout is not
-//     distinguishable from a real failure. This is a known defect, tracked as P6 in
-//     PLAN.md.
+//	buffer, err := stream.TimeoutPopBuffer(time.Second)
+//	if errors.Is(err, aravis.ErrTimeout) {
+//		// no frame this round, not a failure
+//	}
+//
+// The set is [ErrTimeout], [ErrNoBuffer], [ErrNegativeTimeout], [ErrNilStream],
+// [ErrStreamClosed], [ErrNilBuffer], [ErrBufferNotOwned], [ErrBufferAllocation],
+// [ErrPartOutOfRange] and [ErrPartNotImage]. Some are wrapped with the offending
+// value before being returned, which is why errors.Is is the right test rather than
+// an == comparison.
 //
 // Only a GError decides that a call failed. Some accessors wrap C functions that have
 // no GError out-parameter at all, so their error return is always nil; each one says so

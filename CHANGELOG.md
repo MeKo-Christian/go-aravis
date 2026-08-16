@@ -63,10 +63,36 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   semantics including a `testing.AllocsPerRun` zero-allocation assertion, and a `-race`
   concurrency test for control-lost handlers. Buffer tests seed a real payload through
   Aravis's built-in Fake backend, so they need no hardware.
+- **Sentinel errors** in `errors.go`, so the conditions the package decides for itself can
+  be matched with `errors.Is` instead of by string: `ErrTimeout`, `ErrNoBuffer`,
+  `ErrNegativeTimeout`, `ErrNilStream`, `ErrStreamClosed`, `ErrNilBuffer`,
+  `ErrBufferNotOwned`, `ErrBufferAllocation`, `ErrPartOutOfRange`, `ErrPartNotImage`.
+  Failures Aravis reports through a `GError` remain an `*AravisError`.
+- `make test-glib-clean`, which fails on any GLib `CRITICAL **` or `WARNING **` in the test
+  output, plus the CI step that runs it. `tests/README.md` had documented the check since
+  P5, but nothing executed it.
 - `CHANGELOG.md` and a provenance section in the README.
 
 ### Fixed
 
+- **A pop timeout was indistinguishable from a real failure.** `TimeoutPopBuffer` reported
+  every empty result as a freshly allocated `errors.New`, which no `errors.Is` could match,
+  so a dropped frame and a broken stream looked the same. Each pop now says what its empty
+  result means: `TimeoutPopBuffer` returns `ErrTimeout`, `PopBuffer` — which blocks until a
+  buffer exists — returns `ErrNoBuffer`, and `TryPopBuffer` reports an empty output queue as
+  a nil buffer with a **nil error**, since polling an empty queue is the expected outcome
+  rather than a failure.
+- **A negative `TimeoutPopBuffer` duration blocked forever.** Aravis takes an unsigned
+  microsecond count, so a negative `time.Duration` converted to an enormous one. It now
+  returns `ErrNegativeTimeout`; clamping to zero was rejected because it would make a caller
+  bug look exactly like a dropped frame. The nanosecond-to-microsecond conversion also
+  rounds up instead of truncating, so a sub-microsecond timeout still waits — truncation is
+  what turned the historical `TimeoutPopBuffer(1000)` into a 1 µs timeout.
+- **The pops handed a NULL or dangling `ArvStream` to Aravis.** All three now check the
+  stream first and return `ErrNilStream` or `ErrStreamClosed`, where previously the zero
+  value tripped an `ARV_IS_STREAM` assertion (a GLib CRITICAL followed by an empty result
+  indistinguishable from "no frame") and a closed stream reached Aravis with a dangling
+  pointer that nothing catches.
 - **`errno` was being reported as an error.** Many wrappers used cgo's two-result call
   form (`v, err := C.arv_...`), whose second value is `errno`. `errno` is a syscall side
   effect, not a failure report: any syscall the C function makes internally and that

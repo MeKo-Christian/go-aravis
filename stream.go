@@ -15,7 +15,6 @@ void arv_set_stream_property_double(ArvStream *stream, char *property, double va
 import "C"
 
 import (
-	"errors"
 	"time"
 	"unsafe"
 )
@@ -44,6 +43,24 @@ type Stream struct {
 	closed *closeFlag
 }
 
+// check reports whether this Stream may be handed to Aravis. The buffer-queue
+// methods call it first: arv_stream_push_buffer and the three pops all assert
+// ARV_IS_STREAM, which on a NULL pointer logs a GLib CRITICAL and turns a pop
+// into a silent empty result. A closed stream is rejected too — Close drops the
+// reference but leaves the pointer in place, so the call would otherwise reach
+// Aravis with a dangling pointer, which nothing inside the library catches.
+func (s *Stream) check() error {
+	if s == nil || s.stream == nil {
+		return ErrNilStream
+	}
+
+	if s.closed.isClosed() {
+		return ErrStreamClosed
+	}
+
+	return nil
+}
+
 // PushBuffer hands a buffer to the stream's input queue so it can be filled
 // with the next frame, wrapping arv_stream_push_buffer. The stream takes
 // ownership of the buffer and releases it, along with every other buffer still
@@ -70,29 +87,47 @@ func (s *Stream) PushBuffer(b Buffer) {
 // Aravis transfers ownership of the returned buffer to the caller, so it is
 // yours until you hand it back: check Buffer.GetStatus, read the data, then
 // return it with PushBuffer. Stream.Close frees only the buffers still in the
-// stream's queues, and this package has no Buffer.Close, so a popped buffer
-// that is never pushed back leaks with no way to release it. A returned buffer
-// may be nil (Buffer.IsNil) if the stream had nothing to hand out.
+// stream's queues, so a popped buffer that is never pushed back leaks.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. Branch on Buffer.IsNil instead.
+// Because the call waits for a buffer, an empty result can only mean Aravis
+// rejected the stream; it is reported as ErrNoBuffer. A nil or closed stream
+// returns ErrNilStream or ErrStreamClosed without calling Aravis at all.
 func (s *Stream) PopBuffer() (Buffer, error) {
-	return Buffer{buffer: C.arv_stream_pop_buffer(s.stream)}, nil
+	if err := s.check(); err != nil {
+		return Buffer{}, err
+	}
+
+	buffer := C.arv_stream_pop_buffer(s.stream)
+	if buffer == nil {
+		return Buffer{}, ErrNoBuffer
+	}
+
+	return Buffer{buffer: buffer}, nil
 }
 
 // TryPopBuffer takes the next filled buffer from the stream's output queue if
 // one is already available, wrapping arv_stream_try_pop_buffer. This is the
 // non-blocking accessor: it returns immediately, and when no buffer is ready
 // it returns a nil Buffer (Buffer.IsNil reports true) rather than waiting.
-// Always test the result with IsNil before using it.
 //
-// As with PopBuffer, ownership of a non-nil buffer passes to the caller and it
-// must be returned with PushBuffer after use, or it leaks.
+// An empty output queue is the expected result of a poll, not a failure, so it
+// yields a nil Buffer together with a nil error. Test the result with IsNil
+// before using it. A nil or closed stream returns ErrNilStream or
+// ErrStreamClosed.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure, and an empty output queue is reported through Buffer.IsNil.
+// As with PopBuffer, ownership of a non-nil buffer passes to the caller, which
+// must return it with PushBuffer after use, or it leaks.
 func (s *Stream) TryPopBuffer() (Buffer, error) {
-	return Buffer{buffer: C.arv_stream_try_pop_buffer(s.stream)}, nil
+	if err := s.check(); err != nil {
+		return Buffer{}, err
+	}
+
+	buffer := C.arv_stream_try_pop_buffer(s.stream)
+	if buffer == nil {
+		return Buffer{}, nil
+	}
+
+	return Buffer{buffer: buffer}, nil
 }
 
 // TimeoutPopBuffer takes the next filled buffer from the stream's output
@@ -101,25 +136,42 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 // non-blocking accessor — and it is the usual choice in an acquisition loop
 // that must stay responsive when a frame is dropped.
 //
-// t must not be negative. Aravis takes the timeout as an unsigned count of
-// microseconds, so t is divided by 1000 (a time.Duration counts nanoseconds)
-// and converted; a negative duration converts to an enormous unsigned value and
-// the call then waits effectively forever instead of returning. The division
-// truncates: any t below one microsecond becomes a timeout of 0, which makes
-// the call return at once instead of waiting for the sub-microsecond interval
-// that was asked for. Sub-millisecond values are also rounded down to whole
-// microseconds.
+// A timeout is reported as ErrTimeout together with the zero Buffer, so a
+// dropped frame is distinguishable from a real failure:
 //
-// If no buffer arrives within the timeout, the call returns the zero Buffer
-// together with an error stating that Aravis returned a null pointer; a
-// timeout is therefore not distinguishable from other null results. On success
-// Aravis transfers ownership of the buffer to the caller, which must return it
-// with PushBuffer once its status has been checked and its data read —
-// Stream.Close will not free a buffer that is still popped.
+//	buffer, err := stream.TimeoutPopBuffer(time.Second)
+//	if errors.Is(err, aravis.ErrTimeout) {
+//		// no frame this round; carry on
+//	}
+//
+// t must not be negative: Aravis takes the timeout as an unsigned count of
+// microseconds, so a negative duration would convert to an enormous one and
+// block for roughly forever. That is refused with ErrNegativeTimeout rather
+// than clamped to zero, which would make a caller bug look like a dropped
+// frame. The conversion from nanoseconds rounds up, so a sub-microsecond t
+// still waits rather than returning at once.
+//
+// On success Aravis transfers ownership of the buffer to the caller, which
+// must return it with PushBuffer once its status has been checked and its data
+// read — Stream.Close will not free a buffer that is still popped.
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
-	buffer := C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
+	if err := s.check(); err != nil {
+		return Buffer{}, err
+	}
+
+	if t < 0 {
+		return Buffer{}, ErrNegativeTimeout
+	}
+
+	// Round up rather than truncate: rounding down turns a requested wait of
+	// less than a microsecond into no wait at all, which is the shape of the
+	// historical TimeoutPopBuffer(1000) = 1 µs defect. Rounding up can never do
+	// that. Callers passing a microsecond or more see no difference.
+	microseconds := (int64(t) + int64(time.Microsecond) - 1) / int64(time.Microsecond)
+
+	buffer := C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(microseconds))
 	if buffer == nil {
-		return Buffer{}, errors.New("aravis returned a null pointer")
+		return Buffer{}, ErrTimeout
 	}
 
 	return Buffer{buffer: buffer}, nil
