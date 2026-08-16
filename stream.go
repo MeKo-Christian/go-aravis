@@ -73,13 +73,11 @@ func (s *Stream) PushBuffer(b Buffer) {
 // stream's queues, and this package has no Buffer.Close, so a popped buffer
 // that is never pushed back leaks with no way to release it. A returned buffer
 // may be nil (Buffer.IsNil) if the stream had nothing to hand out.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure. Branch on Buffer.IsNil instead.
 func (s *Stream) PopBuffer() (Buffer, error) {
-	var b Buffer
-	var err error
-
-	b.buffer, err = C.arv_stream_pop_buffer(s.stream)
-
-	return b, err
+	return Buffer{buffer: C.arv_stream_pop_buffer(s.stream)}, nil
 }
 
 // TryPopBuffer takes the next filled buffer from the stream's output queue if
@@ -90,13 +88,11 @@ func (s *Stream) PopBuffer() (Buffer, error) {
 //
 // As with PopBuffer, ownership of a non-nil buffer passes to the caller and it
 // must be returned with PushBuffer after use, or it leaks.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure, and an empty output queue is reported through Buffer.IsNil.
 func (s *Stream) TryPopBuffer() (Buffer, error) {
-	var b Buffer
-	var err error
-
-	b.buffer, err = C.arv_stream_try_pop_buffer(s.stream)
-
-	return b, err
+	return Buffer{buffer: C.arv_stream_try_pop_buffer(s.stream)}, nil
 }
 
 // TimeoutPopBuffer takes the next filled buffer from the stream's output
@@ -121,16 +117,12 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 // with PushBuffer once its status has been checked and its data read —
 // Stream.Close will not free a buffer that is still popped.
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
-	var buf Buffer
-	var err error
-
-	buf.buffer, err = C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
-
-	if buf.buffer == nil {
+	buffer := C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(t/1000))
+	if buffer == nil {
 		return Buffer{}, errors.New("aravis returned a null pointer")
 	}
 
-	return buf, err
+	return Buffer{buffer: buffer}, nil
 }
 
 // Close releases the underlying stream. It is safe to call Close more than
