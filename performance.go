@@ -106,12 +106,11 @@ func (c *Camera) GetWidthFast() (int, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
+	cvalue := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0, err
+		return 0, errorFromGError(gerror)
 	}
-	return int(cvalue), err
+	return int(cvalue), nil
 }
 
 // GetHeightFast returns the camera's current image height in pixels by reading
@@ -123,12 +122,11 @@ func (c *Camera) GetHeightFast() (int, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
+	cvalue := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0, err
+		return 0, errorFromGError(gerror)
 	}
-	return int(cvalue), err
+	return int(cvalue), nil
 }
 
 // SetExposureTimeFast sets the camera's exposure time in microseconds by
@@ -157,12 +155,11 @@ func (c *Camera) GetExposureTimeFast() (float64, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_camera_get_float(c.camera, cfeature, &gerror)
+	cvalue := C.arv_camera_get_float(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0.0, err
+		return 0.0, errorFromGError(gerror)
 	}
-	return float64(cvalue), err
+	return float64(cvalue), nil
 }
 
 // SetGainFast sets the camera's gain by writing the "Gain" float feature. The
@@ -191,12 +188,11 @@ func (c *Camera) GetGainFast() (float64, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_camera_get_float(c.camera, cfeature, &gerror)
+	cvalue := C.arv_camera_get_float(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0.0, err
+		return 0.0, errorFromGError(gerror)
 	}
-	return float64(cvalue), err
+	return float64(cvalue), nil
 }
 
 // Fast device feature access using cached strings.
@@ -217,12 +213,11 @@ func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_device_get_string_feature_value(d.device, cfeature, &gerror)
+	cvalue := C.arv_device_get_string_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return "", err
+		return "", errorFromGError(gerror)
 	}
-	return C.GoString(cvalue), err
+	return C.GoString(cvalue), nil
 }
 
 // SetStringFeatureValueFast sets the named GenICam string feature to value.
@@ -256,12 +251,11 @@ func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_device_get_integer_feature_value(d.device, cfeature, &gerror)
+	cvalue := C.arv_device_get_integer_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0, err
+		return 0, errorFromGError(gerror)
 	}
-	return int64(cvalue), err
+	return int64(cvalue), nil
 }
 
 // SetIntegerFeatureValueFast sets the named GenICam integer feature to value.
@@ -290,12 +284,11 @@ func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 	if mustFree {
 		defer C.free(unsafe.Pointer(cfeature))
 	}
-	cvalue, err := C.arv_device_get_float_feature_value(d.device, cfeature, &gerror)
+	cvalue := C.arv_device_get_float_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return 0.0, err
+		return 0.0, errorFromGError(gerror)
 	}
-	return float64(cvalue), err
+	return float64(cvalue), nil
 }
 
 // SetFloatFeatureValueFast sets the named GenICam float feature to value. The

@@ -295,30 +295,26 @@ func (c *Camera) GetModelName() (string, error) {
 // device enumeration and accepted by NewCamera.
 func (c *Camera) GetDeviceId() (string, error) {
 	var gerror *C.GError
-	var err error
 
 	id := C.arv_camera_get_device_id(c.camera, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err := errorFromGError(gerror)
-		return "", err
+		return "", errorFromGError(gerror)
 	}
 
-	return C.GoString(id), err
+	return C.GoString(id), nil
 }
 
 // GetDeviceSerialNumber returns the camera's serial number as reported by the
 // device.
 func (c *Camera) GetDeviceSerialNumber() (string, error) {
 	var gerror *C.GError
-	var err error
 
 	serialNumber := C.arv_camera_get_device_serial_number(c.camera, &gerror)
 	if unsafe.Pointer(gerror) != nil {
-		err = errorFromGError(gerror)
-		return "", err
+		return "", errorFromGError(gerror)
 	}
 
-	return C.GoString(serialNumber), err
+	return C.GoString(serialNumber), nil
 }
 
 // GetSensorSize returns the width and height of the camera's sensor in pixels.
