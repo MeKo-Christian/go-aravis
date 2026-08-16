@@ -5,17 +5,32 @@ package aravis
 // #include <stdlib.h>
 // #include <stdio.h>
 /*
-extern void go_control_lost_handler();
+extern void go_control_lost_handler(guintptr key);
 
-static void control_lost_cb (ArvGvDevice *gv_device)
+// The handler key is carried through GLib as the signal's user_data, so each
+// camera's callback finds its own Go handler instead of a package global.
+static void control_lost_cb (ArvDevice *device, gpointer user_data)
 {
-	go_control_lost_handler();
+	go_control_lost_handler((guintptr) user_data);
 }
 
-static void init_control_lost_cb(ArvCamera *camera)
+static gulong connect_control_lost_cb(ArvCamera *camera, guintptr key)
 {
-	g_signal_connect(arv_camera_get_device(camera), "control-lost",
-		G_CALLBACK (control_lost_cb), NULL);
+	ArvDevice *device = arv_camera_get_device(camera);
+	if (device == NULL)
+		return 0;
+
+	return g_signal_connect(device, "control-lost",
+		G_CALLBACK (control_lost_cb), (gpointer) key);
+}
+
+static void disconnect_control_lost_cb(ArvCamera *camera, gulong handler_id)
+{
+	ArvDevice *device = arv_camera_get_device(camera);
+	if (device == NULL || handler_id == 0)
+		return;
+
+	g_signal_handler_disconnect(device, handler_id);
 }
 
 static void stream_cb_rt(void *user_data, ArvStreamCallbackType type, ArvBuffer *buffer)
@@ -45,6 +60,8 @@ static ArvStream* arv_camera_create_hp_stream(ArvCamera *camera, void *user_data
 import "C"
 
 import (
+	"errors"
+	"sync"
 	"unsafe"
 )
 
@@ -59,6 +76,13 @@ const (
 type Camera struct {
 	camera         *C.struct__ArvCamera
 	ThreadPriority ThreadPriorityType
+
+	// controlLostKey identifies this camera's entry in controlLost.handlers,
+	// and doubles as the user_data the GLib signal carries back. Zero means no
+	// handler has been installed yet.
+	controlLostKey uintptr
+	// controlLostID is the GLib signal handler id, needed to disconnect.
+	controlLostID C.gulong
 }
 
 const (
@@ -124,8 +148,6 @@ func (c *Camera) CreateStream() (Stream, error) {
 	if stream.stream == nil {
 		return Stream{}, err
 	}
-
-	C.init_control_lost_cb(c.camera)
 
 	return stream, err
 }
@@ -905,15 +927,96 @@ func (c *Camera) GetChunkMode() (bool, error) {
 	return toBool(mode), err
 }
 
+// Close releases the camera. It is safe to call more than once; subsequent
+// calls do nothing. Any control-lost handler installed on this camera is
+// disconnected first. The Camera must not be used afterwards.
 func (c *Camera) Close() {
+	if c.camera == nil {
+		return
+	}
+
+	c.clearControlLostHandler()
+
 	C.g_object_unref(C.gpointer(c.camera))
+	c.camera = nil
 }
 
-var controlLostHandler func()
+// controlLost maps handler keys to the Go callbacks they belong to. The C
+// callback runs on an Aravis thread, so every access has to be synchronized;
+// the previous package-global handler variable was both shared between all
+// cameras and read from that thread without any locking.
+var controlLost = struct {
+	sync.Mutex
+	handlers map[uintptr]func()
+	nextKey  uintptr
+}{
+	handlers: make(map[uintptr]func()),
+}
 
+// SetControlLostHandler installs hdl as this camera's control-lost callback,
+// replacing any handler set before. Passing nil removes the handler.
+//
+// hdl is invoked from an Aravis thread, not from the goroutine that called
+// this method, so it must be safe to run concurrently with the rest of the
+// program. Handlers are per-camera: installing one on a camera has no effect
+// on any other.
 func (c *Camera) SetControlLostHandler(hdl func()) error {
-	controlLostHandler = hdl
+	if c.camera == nil {
+		return errors.New("aravis: camera is closed")
+	}
+
+	if hdl == nil {
+		c.clearControlLostHandler()
+		return nil
+	}
+
+	if c.controlLostKey != 0 {
+		// Already connected to the signal — just swap the callback.
+		controlLost.Lock()
+		controlLost.handlers[c.controlLostKey] = hdl
+		controlLost.Unlock()
+
+		return nil
+	}
+
+	controlLost.Lock()
+	controlLost.nextKey++
+	key := controlLost.nextKey
+	controlLost.handlers[key] = hdl
+	controlLost.Unlock()
+
+	// Register the callback only after the handler is reachable, so a signal
+	// arriving immediately finds it.
+	handlerID := C.connect_control_lost_cb(c.camera, C.guintptr(key))
+	if handlerID == 0 {
+		controlLost.Lock()
+		delete(controlLost.handlers, key)
+		controlLost.Unlock()
+
+		return errors.New("aravis: could not connect the control-lost signal")
+	}
+
+	c.controlLostKey = key
+	c.controlLostID = handlerID
+
 	return nil
+}
+
+// clearControlLostHandler disconnects the signal and drops the callback, if
+// one was installed.
+func (c *Camera) clearControlLostHandler() {
+	if c.controlLostKey == 0 {
+		return
+	}
+
+	C.disconnect_control_lost_cb(c.camera, c.controlLostID)
+
+	controlLost.Lock()
+	delete(controlLost.handlers, c.controlLostKey)
+	controlLost.Unlock()
+
+	c.controlLostKey = 0
+	c.controlLostID = 0
 }
 
 func (c *Camera) IsNil() bool {
@@ -921,8 +1024,14 @@ func (c *Camera) IsNil() bool {
 }
 
 //export go_control_lost_handler
-func go_control_lost_handler() {
-	if controlLostHandler != nil {
-		controlLostHandler()
+func go_control_lost_handler(key C.guintptr) {
+	controlLost.Lock()
+	hdl := controlLost.handlers[uintptr(key)]
+	controlLost.Unlock()
+
+	// Called without the lock held: the handler may well call back into this
+	// package, and holding the lock would deadlock it.
+	if hdl != nil {
+		hdl()
 	}
 }
