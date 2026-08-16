@@ -282,21 +282,27 @@ func (d *Device) SetStringFeatureValue(feature, value string) error {
 }
 
 // GetStringFeatureValue returns the value of the string GenICam feature with
-// the given name.
-//
-// The returned error does not report GenICam failures: this call passes a nil
-// GError out-parameter to Aravis, so the error is only the errno cgo observed
-// around the call. A missing feature, a wrong feature type, or a failed read
-// therefore yields the empty string and a nil error rather than an error.
+// the given name. It returns an error if the feature does not exist, is not a
+// string feature, or if the device rejects the read.
 func (d *Device) GetStringFeatureValue(feature string) (string, error) {
 	if err := d.check(); err != nil {
 		return "", err
 	}
 
+	var gerror *C.GError
+
 	cfeature := C.CString(feature)
-	cvalue, err := C.arv_device_get_string_feature_value(d.device, cfeature, nil)
+	// arv_device_get_string_feature_value returns a borrowed const char *
+	// (transfer-ownership="none"), so the result must not be freed; C.GoString
+	// copies it.
+	cvalue := C.arv_device_get_string_feature_value(d.device, cfeature, &gerror)
 	C.free(unsafe.Pointer(cfeature))
-	return C.GoString(cvalue), err
+
+	if unsafe.Pointer(gerror) != nil {
+		return "", errorFromGError(gerror)
+	}
+
+	return C.GoString(cvalue), nil
 }
 
 // SetIntegerFeatureValue sets the integer GenICam feature with the given name
@@ -323,21 +329,24 @@ func (d *Device) SetIntegerFeatureValue(feature string, value int64) error {
 }
 
 // GetIntegerFeatureValue returns the value of the integer GenICam feature with
-// the given name.
-//
-// The returned error does not report GenICam failures: this call passes a nil
-// GError out-parameter to Aravis, so the error is only the errno cgo observed
-// around the call. A missing feature, a wrong feature type, or a failed read
-// therefore yields 0 and a nil error rather than an error.
+// the given name. It returns an error if the feature does not exist, is not an
+// integer feature, or if the device rejects the read.
 func (d *Device) GetIntegerFeatureValue(feature string) (int64, error) {
 	if err := d.check(); err != nil {
 		return 0, err
 	}
 
+	var gerror *C.GError
+
 	cfeature := C.CString(feature)
-	cvalue, err := C.arv_device_get_integer_feature_value(d.device, cfeature, nil)
+	cvalue := C.arv_device_get_integer_feature_value(d.device, cfeature, &gerror)
 	C.free(unsafe.Pointer(cfeature))
-	return int64(cvalue), err
+
+	if unsafe.Pointer(gerror) != nil {
+		return 0, errorFromGError(gerror)
+	}
+
+	return int64(cvalue), nil
 }
 
 // SetFloatFeatureValue sets the float GenICam feature with the given name to
@@ -364,21 +373,24 @@ func (d *Device) SetFloatFeatureValue(feature string, value float64) error {
 }
 
 // GetFloatFeatureValue returns the value of the float GenICam feature with the
-// given name.
-//
-// The returned error does not report GenICam failures: this call passes a nil
-// GError out-parameter to Aravis, so the error is only the errno cgo observed
-// around the call. A missing feature, a wrong feature type, or a failed read
-// therefore yields 0 and a nil error rather than an error.
+// given name. It returns an error if the feature does not exist, is not a float
+// feature, or if the device rejects the read.
 func (d *Device) GetFloatFeatureValue(feature string) (float64, error) {
 	if err := d.check(); err != nil {
 		return 0, err
 	}
 
+	var gerror *C.GError
+
 	cfeature := C.CString(feature)
-	cvalue, err := C.arv_device_get_float_feature_value(d.device, cfeature, nil)
+	cvalue := C.arv_device_get_float_feature_value(d.device, cfeature, &gerror)
 	C.free(unsafe.Pointer(cfeature))
-	return float64(cvalue), err
+
+	if unsafe.Pointer(gerror) != nil {
+		return 0, errorFromGError(gerror)
+	}
+
+	return float64(cvalue), nil
 }
 
 // SetNodeFeatureValue sets the GenICam feature node with the given name from
