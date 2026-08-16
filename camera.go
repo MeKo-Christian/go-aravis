@@ -73,16 +73,29 @@ const (
 	ThreadPriorityHigh
 )
 
-type Camera struct {
-	camera         *C.struct__ArvCamera
-	ThreadPriority ThreadPriorityType
+// cameraState is the lifecycle state that belongs to the underlying camera
+// rather than to one Go value wrapping it. Camera is handed out by value and
+// copied freely, so a copy must see the same registration and the same closed
+// flag — otherwise two copies could each install a control-lost handler, or
+// each unref the camera.
+type cameraState struct {
+	closed closeFlag
 
+	mu sync.Mutex
 	// controlLostKey identifies this camera's entry in controlLost.handlers,
 	// and doubles as the user_data the GLib signal carries back. Zero means no
 	// handler has been installed yet.
 	controlLostKey uintptr
 	// controlLostID is the GLib signal handler id, needed to disconnect.
 	controlLostID C.gulong
+}
+
+type Camera struct {
+	camera         *C.struct__ArvCamera
+	ThreadPriority ThreadPriorityType
+
+	// state is shared by every copy of this Camera. Nil for the zero value.
+	state *cameraState
 }
 
 const (
@@ -101,12 +114,22 @@ func NewCamera(name string) (Camera, error) {
 	var gerror *C.GError
 	var err error
 
-	cs := C.CString(name)
-	defer C.free(unsafe.Pointer(cs))
+	// Aravis takes NULL, not the empty string, as the sentinel for "the first
+	// available camera". C.CString("") would produce a non-NULL pointer to an
+	// empty name, which no camera matches.
+	var cs *C.char
+	if name != "" {
+		cs = C.CString(name)
+		defer C.free(unsafe.Pointer(cs))
+	}
 
 	cam.camera = C.arv_camera_new(cs, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
+	}
+
+	if cam.camera != nil {
+		cam.state = &cameraState{}
 	}
 
 	return cam, err
@@ -148,6 +171,8 @@ func (c *Camera) CreateStream() (Stream, error) {
 	if stream.stream == nil {
 		return Stream{}, err
 	}
+
+	stream.closed = newCloseFlag()
 
 	return stream, err
 }
@@ -927,18 +952,24 @@ func (c *Camera) GetChunkMode() (bool, error) {
 	return toBool(mode), err
 }
 
-// Close releases the camera. It is safe to call more than once; subsequent
-// calls do nothing. Any control-lost handler installed on this camera is
-// disconnected first. The Camera must not be used afterwards.
+// Close releases the camera. It is safe to call more than once, and safe to
+// call on any copy of the same Camera: the camera is unreffed exactly once.
+// Any control-lost handler installed on it is disconnected first. Neither this
+// Camera nor any copy of it may be used afterwards.
 func (c *Camera) Close() {
-	if c.camera == nil {
+	if c.camera == nil || c.state == nil || !c.state.closed.claim() {
 		return
 	}
 
 	c.clearControlLostHandler()
 
 	C.g_object_unref(C.gpointer(c.camera))
-	c.camera = nil
+}
+
+// IsClosed reports whether the camera has been released, by this value or by
+// any copy of it.
+func (c *Camera) IsClosed() bool {
+	return c.camera == nil || c.state == nil || c.state.closed.isClosed()
 }
 
 // controlLost maps handler keys to the Go callbacks they belong to. The C
@@ -958,10 +989,11 @@ var controlLost = struct {
 //
 // hdl is invoked from an Aravis thread, not from the goroutine that called
 // this method, so it must be safe to run concurrently with the rest of the
-// program. Handlers are per-camera: installing one on a camera has no effect
-// on any other.
+// program. Handlers are per-camera and shared by every copy of a Camera:
+// installing one on a camera has no effect on any other camera, and a copy
+// replaces the handler rather than adding a second one.
 func (c *Camera) SetControlLostHandler(hdl func()) error {
-	if c.camera == nil {
+	if c.camera == nil || c.state == nil || c.state.closed.isClosed() {
 		return errors.New("aravis: camera is closed")
 	}
 
@@ -970,10 +1002,13 @@ func (c *Camera) SetControlLostHandler(hdl func()) error {
 		return nil
 	}
 
-	if c.controlLostKey != 0 {
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	if c.state.controlLostKey != 0 {
 		// Already connected to the signal — just swap the callback.
 		controlLost.Lock()
-		controlLost.handlers[c.controlLostKey] = hdl
+		controlLost.handlers[c.state.controlLostKey] = hdl
 		controlLost.Unlock()
 
 		return nil
@@ -996,8 +1031,8 @@ func (c *Camera) SetControlLostHandler(hdl func()) error {
 		return errors.New("aravis: could not connect the control-lost signal")
 	}
 
-	c.controlLostKey = key
-	c.controlLostID = handlerID
+	c.state.controlLostKey = key
+	c.state.controlLostID = handlerID
 
 	return nil
 }
@@ -1005,18 +1040,25 @@ func (c *Camera) SetControlLostHandler(hdl func()) error {
 // clearControlLostHandler disconnects the signal and drops the callback, if
 // one was installed.
 func (c *Camera) clearControlLostHandler() {
-	if c.controlLostKey == 0 {
+	if c.state == nil {
 		return
 	}
 
-	C.disconnect_control_lost_cb(c.camera, c.controlLostID)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	if c.state.controlLostKey == 0 {
+		return
+	}
+
+	C.disconnect_control_lost_cb(c.camera, c.state.controlLostID)
 
 	controlLost.Lock()
-	delete(controlLost.handlers, c.controlLostKey)
+	delete(controlLost.handlers, c.state.controlLostKey)
 	controlLost.Unlock()
 
-	c.controlLostKey = 0
-	c.controlLostID = 0
+	c.state.controlLostKey = 0
+	c.state.controlLostID = 0
 }
 
 func (c *Camera) IsNil() bool {

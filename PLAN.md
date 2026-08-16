@@ -73,14 +73,33 @@ progress.
       `GetNumInferface` remains as a `// Deprecated:` wrapper that forwards, so
       existing callers keep compiling; in-repo callers were moved over.
 - [x] **`Close()` methods are unguarded.** `Camera.Close` and `Stream.Close` now
-      return early on a nil pointer and nil the pointer after unreffing, so a
-      zero value or a second `Close` is a no-op. No `runtime.SetFinalizer`:
-      `Camera`, `Stream` and `Device` are value types, and a finalizer on a value
-      that callers routinely copy would unref while a copy is still live.
+      return early on a nil pointer and unref exactly once. The first attempt
+      stored a per-value guard, which PR review correctly rejected: `Camera`,
+      `Stream` and `Device` are handed out **by value**, so a copy carries the
+      same C pointer but its own guard, and closing two copies still unreffed
+      twice. The lifecycle state now sits behind shared identity — a
+      `*closeFlag` (`lifecycle.go`) whose `claim()` succeeds once, shared by
+      every copy — so `Close` is idempotent per underlying object rather than
+      per Go value. `Camera`'s control-lost registration moved into the same
+      shared `cameraState` for the same reason: two copies would otherwise each
+      see key zero and connect a separate signal handler. Each type also gained
+      `IsClosed()`.
+      No `runtime.SetFinalizer`: on a freely copied value type a finalizer would
+      unref while a copy is still live, trading a leak for a crash.
       Implementing `OpenDevice` also forced the ownership question for `Device`,
       which had no `Close` at all — `OpenDevice` hands over a reference the caller
-      owns, while `Camera.GetDevice` only borrows the camera's. `Device` gained an
-      `owned` flag and a `Close` that unrefs only in the first case.
+      owns (`transfer-ownership="full"`), while `Camera.GetDevice` only borrows
+      the camera's. A non-nil `owned` flag marks the former; `Close` unrefs only
+      then.
+- [x] **Empty id/name passed to Aravis as `""` instead of NULL.** Raised in PR
+      review for `OpenDevice`; `NewCamera` had the identical bug. Aravis
+      documents NULL as the "first available device" sentinel (`nullable="1"` in
+      the GIR), so `C.CString("")` asked for a device whose id is the empty
+      string, which nothing matches. Both now pass a nil `*C.char`.
+      Not covered by a test: Aravis's Fake backend does not implement the
+      first-device lookup either — `arv_open_device(NULL)` reports "device not
+      found" while the interface enumerates `Fake_1` — so
+      `TestOpenDeviceFirstAvailable` skips rather than faking coverage.
 
 ### P2 — Remove false performance machinery / claims
 

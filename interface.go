@@ -64,8 +64,14 @@ func OpenDevice(id string) (Device, error) {
 	var gerror *C.GError
 	var d Device
 
-	cs := C.CString(id)
-	defer C.free(unsafe.Pointer(cs))
+	// Aravis takes NULL, not the empty string, as the sentinel for "the first
+	// available device". C.CString("") would produce a non-NULL pointer to an
+	// empty id, which no device matches.
+	var cs *C.char
+	if id != "" {
+		cs = C.CString(id)
+		defer C.free(unsafe.Pointer(cs))
+	}
 
 	d.device = C.arv_open_device(cs, &gerror)
 	if unsafe.Pointer(gerror) != nil {
@@ -75,7 +81,7 @@ func OpenDevice(id string) (Device, error) {
 	if d.device == nil {
 		return Device{}, errors.New("aravis returned a null pointer")
 	}
-	d.owned = true
+	d.owned = newCloseFlag()
 
 	return d, nil
 }

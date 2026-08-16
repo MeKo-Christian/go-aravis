@@ -61,30 +61,34 @@ const (
 type Device struct {
 	device *C.struct__ArvDevice
 
-	// owned records whether this Device holds a reference of its own.
-	// [OpenDevice] does; [Camera.GetDevice] only borrows the camera's device,
-	// which the camera itself releases. Close must unref the former and leave
-	// the latter alone.
-	owned bool
+	// owned is non-nil exactly when this Device holds a reference of its own,
+	// which is the case for [OpenDevice]. [Camera.GetDevice] only borrows the
+	// camera's device — the camera releases that one — and leaves this nil.
+	//
+	// The flag is shared by every copy of the Device, so the reference is
+	// dropped once even though callers copy the value around.
+	owned *closeFlag
 }
 
 // Close releases the device if this Device owns a reference to it, which is
 // the case for devices obtained from [OpenDevice]. For a device borrowed from
 // [Camera.GetDevice] it does nothing — that one belongs to the camera.
 //
-// Close is safe to call more than once. The Device must not be used
-// afterwards.
+// Close is safe to call more than once, and safe to call on any copy of the
+// same Device: the reference is dropped exactly once. Neither this Device nor
+// any copy of it may be used afterwards.
 func (d *Device) Close() {
-	if d.device == nil {
+	if d.device == nil || !d.owned.claim() {
 		return
 	}
 
-	if d.owned {
-		C.g_object_unref(C.gpointer(d.device))
-	}
+	C.g_object_unref(C.gpointer(d.device))
+}
 
-	d.device = nil
-	d.owned = false
+// IsClosed reports whether an owned device has been released, by this value or
+// by any copy of it. A borrowed device is never closed by this package.
+func (d *Device) IsClosed() bool {
+	return d.device == nil || d.owned.isClosed()
 }
 
 func (d *Device) TakeControl() (bool, error) {
