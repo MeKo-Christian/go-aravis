@@ -131,7 +131,15 @@ test-glib-clean:
     #!/usr/bin/env bash
     set -euo pipefail
     echo -e "{{ bold }}Checking the test output for GLib diagnostics...{{ nc }}"
-    if [ ! -f test-output.txt ]; then
+    # Re-run by default so the output always matches the working tree. Set
+    # GLIB_REUSE_OUTPUT=1 to grade an existing test-output.txt instead, as CI
+    # does; a leftover log would otherwise turn this recipe green on its own.
+    if [ -n "${GLIB_REUSE_OUTPUT:-}" ]; then
+        if [ ! -f test-output.txt ]; then
+            echo -e "{{ red }}✗ GLIB_REUSE_OUTPUT is set but test-output.txt does not exist{{ nc }}"
+            exit 1
+        fi
+    else
         {{ go }} test -v ./... 2>&1 | tee test-output.txt
     fi
     if grep -nE 'CRITICAL \*\*|-CRITICAL' test-output.txt; then
