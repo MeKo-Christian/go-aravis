@@ -75,6 +75,7 @@ in isolation.
 | `camera_test.go` | camera identity, geometry, parameter round-trips, `*Fast` accessors, stream creation |
 | `buffer_test.go` | the fresh-buffer contract and the filled-buffer accessors, including multipart |
 | `buffer_data_test.go` | `GetDataInto` clamping, overrun, empty dest, and its zero-allocation guarantee |
+| `stream_pop_test.go` | the three pops: the timeout sentinel, the negative and sub-microsecond timeout, the empty poll, the nil and closed stream, and a positive control under acquisition |
 | `device_guard_test.go` | the `Device` guards: the GigE-only control calls against a non-GigE device, the zero-size `ReadMemory`, the nil receiver, and `Camera.GetDevice`/`IsGVDevice` |
 | `lifecycle_test.go` | `Close` idempotence across copies, owned vs borrowed devices, control-lost handlers under `-race` |
 | `integration_test.go` | the full acquisition workflow and sustained streaming |
@@ -159,13 +160,19 @@ version.
 `pkg-config --exists aravis-0.8`. The package is `libaravis-dev` on Ubuntu
 24.04 and later, `libaravis-0.8-dev` before that; both ship Aravis 0.8.
 
-**GLib `CRITICAL` messages** — these mean a test is calling an Aravis function
-outside its preconditions, and they are treated as a defect in the test, not as
-noise. The suite currently produces none:
+**GLib `CRITICAL` messages** — these mean an Aravis function is being called
+outside its preconditions, and they are treated as a defect in the binding or
+the test, not as noise. The suite produces none, and that is now enforced
+rather than merely documented:
 
 ```bash
-go test ./... 2>&1 | grep -c CRITICAL   # must be 0
+make test-glib-clean    # fails on any "CRITICAL **" or "WARNING **" line
 ```
+
+The target reuses `test-output.txt` when it already exists, which is how the CI
+`fake-backend-test` job checks the run it has already paid for instead of
+running the suite twice. Delete the file (or `make clean`) to force a fresh
+run.
 
 ## Contributing
 

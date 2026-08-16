@@ -27,7 +27,6 @@ package aravis
 import "C"
 
 import (
-	"errors"
 	"unsafe"
 )
 
@@ -102,11 +101,11 @@ type Buffer struct {
 // Stream.PushBuffer, which takes over ownership; see Buffer for the ownership
 // rules. arv_buffer_new has no error channel, so the only failure this can
 // report is a NULL result, in which case a zero Buffer (IsNil reports true) is
-// returned together with an error.
+// returned together with ErrBufferAllocation.
 func NewBuffer(size uint) (Buffer, error) {
 	buffer := C.arv_buffer_new(C.size_t(size), nil)
 	if buffer == nil {
-		return Buffer{}, errors.New("aravis returned a null pointer")
+		return Buffer{}, ErrBufferAllocation
 	}
 
 	return Buffer{buffer: buffer}, nil

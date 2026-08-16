@@ -123,6 +123,34 @@ test-coverage: ## Run tests with coverage
 	@$(GO) tool cover -func=coverage.out | tail -1
 	@echo "$(GREEN)✓ Coverage report generated: coverage.html$(NC)"
 
+# A GLib CRITICAL means an Aravis function was called outside its preconditions
+# — a NULL pointer, an out-of-range index, a part that is not an image.
+# tests/README.md has documented `grep -c CRITICAL` as the check since P5, but
+# nothing ran it, so nothing enforced it. This target does, and CI calls it in
+# the fake-backend-test job.
+#
+# WARNING is deliberately *not* matched. Aravis emits one from
+# arv_enable_interface for an unknown interface name, which
+# TestEnableDisableInterfaceChangesDiscovery provokes on purpose, so a
+# WARNING here is not evidence of a defect the way a CRITICAL is.
+#
+# GLIB_TEST_OUTPUT is reused if it already exists, which is what lets CI check
+# the output of the run it has already paid for instead of running the suite a
+# second time.
+GLIB_TEST_OUTPUT ?= test-output.txt
+
+test-glib-clean: ## Fail if the test suite produced GLib CRITICAL output
+	@echo "$(BOLD)Checking the test output for GLib diagnostics...$(NC)"
+	@if [ ! -f $(GLIB_TEST_OUTPUT) ]; then \
+		set -o pipefail; \
+		CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... 2>&1 | tee $(GLIB_TEST_OUTPUT); \
+	fi
+	@if grep -nE 'CRITICAL \*\*|-CRITICAL' $(GLIB_TEST_OUTPUT); then \
+		echo "$(RED)✗ GLib reported the lines above; a call is being made outside its preconditions$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ No GLib CRITICAL output$(NC)"
+
 # -run '^$$' keeps -bench from re-running the whole test suite alongside the
 # benchmarks. BENCHTIME is overridable so CI can execute every benchmark body
 # in a few seconds (BENCHTIME=10x) without pretending the timings are
@@ -177,7 +205,7 @@ verify: ## Verify dependencies
 clean: ## Clean build artifacts
 	@echo "$(BOLD)Cleaning build artifacts...$(NC)"
 	@rm -rf $(BIN_DIR)
-	@rm -f coverage.out coverage.html
+	@rm -f coverage.out coverage.html $(GLIB_TEST_OUTPUT)
 	@$(GO) clean -cache
 	@echo "$(GREEN)✓ Clean completed$(NC)"
 

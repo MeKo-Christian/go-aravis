@@ -220,6 +220,13 @@ jobs:
           exit 1
         fi
 
+    - name: Fail on GLib CRITICAL or WARNING output
+      # Reuses test-output.txt from the step above, so the suite is not run a
+      # second time. A GLib diagnostic means an Aravis function was called
+      # outside its preconditions; tests/README.md has documented this check
+      # since P5 but nothing enforced it until now.
+      run: make test-glib-clean
+
   docker-test:
     name: Docker Test
     runs-on: ubuntu-latest
