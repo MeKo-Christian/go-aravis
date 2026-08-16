@@ -243,18 +243,23 @@ func (c *Camera) CreateStream() (Stream, error) {
 // Camera, so it must not be used after the Camera has been closed. This is the
 // opposite of OpenDevice, which hands ownership to the caller.
 //
-// The returned error is always nil; it exists for signature symmetry with the
-// rest of the API. It is not a success indicator: the underlying call can
-// return NULL and this method does not check, so a nil Device can come back
-// alongside that nil error. Test the result with Device.IsNil before calling
-// anything on it.
+// An error is returned when the camera has no device to hand out, which is the
+// case for the zero value and for a closed camera. The underlying Aravis call
+// reports failure as NULL rather than through a GError, so the error is a plain
+// one; on success the returned Device is never nil.
 func (c *Camera) GetDevice() (Device, error) {
 	var d Device
-	var err error
+
+	if c.camera == nil {
+		return Device{}, errors.New("aravis: camera is closed")
+	}
 
 	d.device = C.arv_camera_get_device(c.camera)
+	if d.device == nil {
+		return Device{}, errors.New("aravis returned a null pointer")
+	}
 
-	return d, err
+	return d, nil
 }
 
 // GetVendorName returns the camera's vendor name as reported by the device.
@@ -1039,8 +1044,16 @@ func (c *Camera) GetPayloadSize() (uint, error) {
 }
 
 // IsGVDevice reports whether the camera is a GigE Vision device, that is,
-// whether the GV* methods apply to it. The returned error is always nil.
+// whether the GV* methods apply to it.
+//
+// A camera that holds no device — the zero value, or a closed camera — cannot
+// answer the question and returns an error rather than the false a real
+// non-GigE camera returns.
 func (c *Camera) IsGVDevice() (bool, error) {
+	if c.camera == nil {
+		return false, errors.New("aravis: camera is closed")
+	}
+
 	cbool := C.arv_camera_is_gv_device(c.camera)
 
 	return toBool(cbool), nil
