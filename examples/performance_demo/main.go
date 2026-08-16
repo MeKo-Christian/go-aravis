@@ -99,7 +99,14 @@ func main() {
 
 	fmt.Printf("Payload size: %d bytes\n", payloadSize)
 
-	// Create buffers for streaming
+	// Create buffers for streaming.
+	//
+	// buffers keeps a copy of each Buffer value from before the push, which is
+	// worth being precise about: the push transfers ownership to the stream, so
+	// these copies are inert. They may not be closed and may not be pushed
+	// again — Stream.PushBuffer rejects a second push with ErrBufferNotOwned
+	// rather than handing Aravis a buffer it already owns. The slice is kept
+	// only to show how many buffers were queued.
 	numBuffers := 5
 	buffers := make([]aravis.Buffer, numBuffers)
 
@@ -110,8 +117,14 @@ func main() {
 		}
 
 		buffers[i] = buffer
-		stream.PushBuffer(buffer)
+
+		if err := stream.PushBuffer(buffer); err != nil {
+			buffer.Close()
+			log.Fatal(err)
+		}
 	}
+
+	fmt.Printf("Queued %d buffers\n", len(buffers))
 
 	// Pre-allocate slice for zero-allocation data access
 	dataSlice := make([]byte, payloadSize)
@@ -139,7 +152,10 @@ func main() {
 		// Check buffer status
 		status, err := buffer.GetStatus()
 		if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
-			stream.PushBuffer(buffer)
+			if err := stream.PushBuffer(buffer); err != nil {
+				log.Fatal(err)
+			}
+
 			continue
 		}
 
@@ -163,7 +179,9 @@ func main() {
 		}
 
 		// Return buffer to stream for reuse
-		stream.PushBuffer(buffer)
+		if err := stream.PushBuffer(buffer); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	elapsed := time.Since(startTime)

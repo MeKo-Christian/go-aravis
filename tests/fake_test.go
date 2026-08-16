@@ -207,11 +207,16 @@ func firstHardwareDeviceID(tb testing.TB) string {
 }
 
 // pushBack returns a popped buffer to its stream. Every acquisition test goes
-// through it so that no call site can silently drop the buffer.
+// through it so that no call site can silently drop the buffer, and so that the
+// error PushBuffer now returns is checked rather than discarded — pushing a
+// buffer the caller no longer owns is exactly the double free the ownership
+// flag exists to catch.
 func pushBack(tb testing.TB, stream aravis.Stream, buffer aravis.Buffer) {
 	tb.Helper()
 
-	stream.PushBuffer(buffer)
+	if err := stream.PushBuffer(buffer); err != nil {
+		tb.Errorf("PushBuffer() returned error: %v", err)
+	}
 }
 
 // seededBuffer returns a filled buffer whose bytes follow a deterministic
@@ -257,7 +262,7 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 		tb.Fatalf("NewBuffer(%d) returned a nil buffer", payloadSize)
 	}
 
-	stream.PushBuffer(buf)
+	pushBack(tb, stream, buf)
 
 	if err := camera.StartAcquisition(); err != nil {
 		tb.Fatalf("StartAcquisition() returned error: %v", err)
@@ -282,13 +287,18 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 	}
 
 	// A popped buffer belongs to the caller: Stream.Close frees only what is
-	// still sitting in the stream's queues, and Buffer has no Close of its own
-	// (see P6 in PLAN.md), so pushing it back is the only way to release it.
+	// still sitting in the stream's queues, so it has to be given back. Pushing
+	// it is what this helper does — Buffer.Close would release it too, but the
+	// push is the shape every caller of seededBuffer wants, since it leaves the
+	// stream able to keep streaming.
 	//
 	// This is registered after the stream's own cleanup, and t.Cleanup runs
 	// last-in-first-out, so the push-back happens before Stream.Close — which
-	// is what makes Stream.Close able to free it.
-	tb.Cleanup(func() { stream.PushBuffer(filled) })
+	// is what makes Stream.Close able to free it. With ownership enforced, the
+	// order is no longer just tidy: pushing after Stream.Close would now be
+	// rejected with ErrStreamClosed instead of silently handing a buffer to a
+	// released stream.
+	tb.Cleanup(func() { pushBack(tb, stream, filled) })
 
 	if status, err := filled.GetStatus(); err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
 		tb.Fatalf("GetStatus() = %d, %v; want %d, nil", status, err, aravis.BUFFER_STATUS_SUCCESS)

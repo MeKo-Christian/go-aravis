@@ -35,7 +35,10 @@
 //		if err != nil {
 //			return err
 //		}
-//		stream.PushBuffer(buffer)
+//		if err := stream.PushBuffer(buffer); err != nil {
+//			buffer.Close()
+//			return err
+//		}
 //	}
 //
 //	if err := camera.StartAcquisition(); err != nil {
@@ -44,27 +47,32 @@
 //	defer camera.StopAcquisition()
 //
 //	buffer, err := stream.TimeoutPopBuffer(time.Second)
-//	if !buffer.IsNil() {
-//		// Push back whatever we got, even on error: a popped buffer belongs to us,
-//		// and nothing else will free it.
-//		defer stream.PushBuffer(buffer)
+//	if errors.Is(err, aravis.ErrTimeout) {
+//		// No frame this round. Not a failure.
+//		return nil
 //	}
 //	if err != nil {
 //		return err
 //	}
+//	// A popped buffer belongs to us, so give it back: push it to keep the queue
+//	// full, or Close it to release it.
+//	defer stream.PushBuffer(buffer)
+//
 //	if status, _ := buffer.GetStatus(); status == aravis.BUFFER_STATUS_SUCCESS {
 //		data, _ := buffer.GetData()
 //		_ = data
 //	}
 //
-// A buffer popped from the stream must be pushed back. This is not merely about
-// keeping the queue full: Aravis transfers ownership of a popped buffer to the caller,
-// [Stream.Close] frees only the buffers still sitting in the stream's queues, and this
-// package exposes no Buffer.Close. A popped buffer that is never pushed back therefore
-// leaks, with no way to release it.
+// A buffer popped from the stream must be given back. This is not merely about keeping
+// the queue full: Aravis transfers ownership of a popped buffer to the caller, and
+// [Stream.Close] frees only the buffers still sitting in the stream's queues. Return it
+// with [Stream.PushBuffer], or release it with [Buffer.Close] when the frame was the
+// last one wanted; a buffer that gets neither leaks.
 //
-// The pop methods can also return a non-nil buffer together with a non-nil error, so
-// test the buffer rather than the error before deciding whether to push it back.
+// Ownership moves in both directions, and the package tracks it. A push hands the buffer
+// to the stream, which makes that Go value and every copy of it inert — a second push, or
+// a Close after the push, is refused with [ErrBufferNotOwned] rather than freeing the
+// buffer twice. Each pop mints a fresh Buffer value that owns the buffer again.
 //
 // Always check [Buffer.GetStatus] before trusting pixel data: a buffer can be returned
 // with missing packets or a timeout and still be non-nil.
@@ -74,14 +82,15 @@
 //
 // # Value types and Close
 //
-// [Camera], [Stream] and [Device] are small structs wrapping a C pointer, and they are
-// handed out and copied by value. Copies of one of these values all refer to the same
-// underlying C object and share a single close flag, so Close is idempotent per
+// [Camera], [Stream], [Device] and [Buffer] are small structs wrapping a C pointer, and
+// they are handed out and copied by value. Copies of one of these values all refer to
+// the same underlying C object and share a single close flag, so Close is idempotent per
 // underlying object rather than per Go value: closing two copies unrefs once, not twice.
 //
 // None of these types has a finalizer. On a freely copied value type a finalizer would
 // unref while a copy is still live, which trades a leak for a crash, so cleanup is
-// explicit. Every Camera, Stream and owned Device must be closed by the caller.
+// explicit. Every Camera, Stream, owned Device and unpushed Buffer must be released by
+// the caller.
 //
 // Ownership of a [Device] depends on where it came from:
 //
@@ -89,8 +98,12 @@
 //   - [Camera.GetDevice] only borrows the camera's device. Do not Close it, and do not
 //     use it after the camera is closed.
 //
-// [Buffer] has no Close. A buffer from [NewBuffer] that is pushed to a stream belongs to
-// that stream from then on and is released when the stream is closed.
+// A [Buffer]'s close flag doubles as its ownership flag, because ownership of a buffer
+// ping-pongs between the caller and the stream. [Stream.PushBuffer] claims the flag: the
+// buffer belongs to the stream from then on and is released when the stream is closed.
+// Every pop mints a new Buffer with a new flag, because Aravis transfers ownership back.
+// [Buffer.Close] is for a buffer that is nobody else's: one [NewBuffer] created and
+// nothing ever pushed, and one that was popped and is not going back.
 //
 // # Pixel data
 //
@@ -107,9 +120,10 @@
 // yours the moment the buffer goes back with [Stream.PushBuffer]: the stream may refill
 // that buffer with the next frame immediately, so a retained alias first sees its
 // contents change underneath it, and becomes a genuinely dangling pointer once the
-// stream releases the buffer. Neither Go's garbage collector nor its race detector can
-// see either hazard. Consume the data, or copy what you need to keep, before pushing
-// the buffer back.
+// stream releases the buffer. [Buffer.Close] invalidates such a slice in exactly the same
+// way, and more abruptly — it frees the payload there and then. Neither Go's garbage
+// collector nor its race detector can see either hazard. Consume the data, or copy what
+// you need to keep, before giving the buffer up.
 //
 // [Buffer.GetDataInto] has no such constraint — the copy is yours and survives
 // PushBuffer — but reusing one destination slice across iterations means each frame

@@ -27,6 +27,7 @@ package aravis
 import "C"
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -72,8 +73,8 @@ const (
 // image (plus any chunk or multipart data that came with it).
 //
 // Buffer is a small value type holding a C pointer; copying it copies the
-// pointer, not the payload. It has no Close method, which makes ownership worth
-// following closely, because it moves back and forth:
+// pointer, not the payload. Ownership is worth following closely, because it
+// moves back and forth between the caller and the stream:
 //
 //   - A buffer you allocate with NewBuffer starts out yours.
 //   - Stream.PushBuffer transfers it to the stream. Stream.Close releases every
@@ -82,14 +83,67 @@ const (
 //     it back to you. While a buffer is popped it is outside the stream's
 //     queues, so Stream.Close will not free it.
 //
-// Since this package exposes no way to release a buffer on its own, a buffer is
-// leaked whenever it is in the caller's hands and the stream goes away: one that
-// NewBuffer created and nothing ever pushed, and one that was popped and never
-// pushed back. Branch on Buffer.IsNil rather than on the error when deciding
-// whether there is a buffer to push back: Stream.TryPopBuffer legitimately
-// returns a nil buffer with a nil error when the output queue is empty.
+// A buffer in your hands is released either by pushing it to a stream or by
+// calling Close on it. Do exactly one of the two: a buffer that is neither
+// pushed nor closed leaks, and one that is pushed twice, or closed after being
+// pushed, would be freed twice. The owned flag below enforces that, so the
+// second attempt returns an error rather than corrupting the heap.
+//
+// Branch on Buffer.IsNil rather than on the error when deciding whether there
+// is a buffer to release: Stream.TryPopBuffer legitimately returns a nil buffer
+// with a nil error when the output queue is empty.
 type Buffer struct {
 	buffer *C.struct__ArvBuffer
+
+	// owned carries the caller's claim on the underlying ArvBuffer and is
+	// shared by every copy of this Buffer, exactly as Device.owned is. Aravis
+	// hands ownership back and forth — arv_stream_push_buffer takes it
+	// (transfer-ownership="full" on the parameter) and the pops give it back
+	// (transfer-ownership="full" on the result) — so a push claims this flag
+	// and every pop mints a fresh one. The invariant is that at most one Go
+	// Buffer value holds an unclaimed flag for a given ArvBuffer at a time,
+	// which is what makes both Close and PushBuffer safe on a value that has
+	// been copied around.
+	//
+	// Nil for the zero value, which owns nothing.
+	owned *closeFlag
+}
+
+// ownedBuffer wraps an ArvBuffer whose ownership Aravis has just transferred to
+// the caller, which is the case for every buffer coming out of a pop.
+func ownedBuffer(buffer *C.struct__ArvBuffer) Buffer {
+	return Buffer{buffer: buffer, owned: newCloseFlag()}
+}
+
+// Close releases the buffer, dropping the reference the caller holds. Use it
+// for a buffer that will not be given back to a stream: one that NewBuffer
+// created and nothing ever pushed, and one that was popped and is not being
+// pushed back. Both of those used to leak, because Stream.Close frees only the
+// buffers still sitting in the stream's queues.
+//
+// Close is safe to call more than once, and safe to call on any copy of the
+// same Buffer: the reference is dropped exactly once. It does nothing for the
+// zero value and for a buffer that has already been handed to a stream with
+// Stream.PushBuffer — that one belongs to the stream now.
+//
+// Neither this Buffer nor any copy of it may be used afterwards, and neither
+// may any slice or pointer obtained from GetDataSlice or GetDataUnsafe: Close
+// frees the payload memory they alias, exactly as PushBuffer invalidates them
+// by handing the memory back to the stream.
+func (b *Buffer) Close() {
+	if b.buffer == nil || !b.owned.claim() {
+		return
+	}
+
+	C.g_object_unref(C.gpointer(b.buffer))
+}
+
+// IsClosed reports whether this buffer is no longer the caller's, which is the
+// case once Close has released it or Stream.PushBuffer has handed it to a
+// stream — through this value or through any copy of it. The zero value is
+// never anybody's and reports true.
+func (b *Buffer) IsClosed() bool {
+	return b.buffer == nil || b.owned.isClosed()
 }
 
 // NewBuffer allocates a new buffer with room for size bytes of payload,
@@ -97,18 +151,19 @@ type Buffer struct {
 // (see Camera.GetPayloadSize), otherwise acquisition fails with
 // BUFFER_STATUS_SIZE_MISMATCH.
 //
-// The returned buffer is meant to be handed to a stream with
-// Stream.PushBuffer, which takes over ownership; see Buffer for the ownership
-// rules. arv_buffer_new has no error channel, so the only failure this can
-// report is a NULL result, in which case a zero Buffer (IsNil reports true) is
-// returned together with ErrBufferAllocation.
+// The returned buffer belongs to the caller. Hand it to a stream with
+// Stream.PushBuffer, which takes over ownership, or release it with
+// Buffer.Close; see Buffer for the ownership rules. arv_buffer_new has no error
+// channel, so the only failure this can report is a NULL result, in which case
+// a zero Buffer (IsNil reports true) is returned together with
+// ErrBufferAllocation.
 func NewBuffer(size uint) (Buffer, error) {
 	buffer := C.arv_buffer_new(C.size_t(size), nil)
 	if buffer == nil {
 		return Buffer{}, ErrBufferAllocation
 	}
 
-	return Buffer{buffer: buffer}, nil
+	return ownedBuffer(buffer), nil
 }
 
 // GetData returns a copy of the buffer payload in a freshly allocated Go
@@ -248,17 +303,83 @@ func (b *Buffer) GetNumParts() (int, error) {
 	return int(C.arv_buffer_get_n_parts(b.buffer)), nil
 }
 
+// checkPart reports whether partIndex may be handed to Aravis. The part
+// accessors assert `part_id < n_parts` internally, which for an out-of-range
+// index logs a GLib CRITICAL and returns 0 — a value the caller cannot
+// distinguish from a real one.
+func (b *Buffer) checkPart(partIndex int) error {
+	if b.buffer == nil {
+		return ErrNilBuffer
+	}
+
+	numParts := int(C.arv_buffer_get_n_parts(b.buffer))
+	if partIndex < 0 || partIndex >= numParts {
+		return fmt.Errorf("%w: part %d of %d", ErrPartOutOfRange, partIndex, numParts)
+	}
+
+	return nil
+}
+
+// checkImagePart reports whether the part at partIndex carries image geometry.
+//
+// The five accessors that need it (width, height, x, y and the pixel format)
+// are guarded inside Aravis by arv_buffer_part_is_image, which is static in
+// arvbuffer.c and absent from the public header, so its condition is
+// reproduced here: the buffer must have been acquired successfully, its payload
+// must be an image, extended chunk data or multipart, and the part's data type
+// must be one Aravis recognises as an image.
+//
+// The data types are an allow-list rather than a deny-list on purpose. A data
+// type this list does not know — a future addition to the enumeration — is then
+// rejected with a Go error instead of reaching Aravis and producing a CRITICAL.
+// The list is a transcription of arv_buffer_part_is_image in Aravis 0.8.30.
+func (b *Buffer) checkImagePart(partIndex int) error {
+	if err := b.checkPart(partIndex); err != nil {
+		return err
+	}
+
+	if int(C.arv_buffer_get_status(b.buffer)) != int(C.ARV_BUFFER_STATUS_SUCCESS) {
+		return fmt.Errorf("%w: part %d of a buffer that was not acquired successfully",
+			ErrPartNotImage, partIndex)
+	}
+
+	switch int(C.arv_buffer_get_payload_type(b.buffer)) {
+	case int(C.ARV_BUFFER_PAYLOAD_TYPE_IMAGE),
+		int(C.ARV_BUFFER_PAYLOAD_TYPE_EXTENDED_CHUNK_DATA),
+		int(C.ARV_BUFFER_PAYLOAD_TYPE_MULTIPART):
+	default:
+		return fmt.Errorf("%w: part %d of a payload that carries no image", ErrPartNotImage, partIndex)
+	}
+
+	switch int(C.arv_buffer_get_part_data_type(b.buffer, C.guint(partIndex))) {
+	case int(C.ARV_BUFFER_PART_DATA_TYPE_2D_IMAGE),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_2D_PLANE_BIPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_2D_PLANE_TRIPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_2D_PLANE_QUADPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_3D_IMAGE),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_3D_PLANE_BIPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_3D_PLANE_TRIPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_3D_PLANE_QUADPLANAR),
+		int(C.ARV_BUFFER_PART_DATA_TYPE_CONFIDENCE_MAP):
+		return nil
+	default:
+		return fmt.Errorf("%w: part %d is not an image part", ErrPartNotImage, partIndex)
+	}
+}
+
 // GetPartData returns a copy of the payload of the part at partIndex, wrapping
 // arv_buffer_get_part_data. Like GetData it allocates a fresh Go slice, so the
 // result stays valid after the buffer is pushed back to the stream; there is
 // no zero-copy variant for parts.
 //
-// partIndex must be less than GetNumParts; an out-of-range index is not checked
-// here and is passed straight to Aravis.
-//
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. An empty part yields a nil slice.
+// partIndex is checked against GetNumParts, and an index outside it yields
+// ErrPartOutOfRange; a buffer holding no ArvBuffer yields ErrNilBuffer. An
+// empty part yields a nil slice and a nil error.
 func (b *Buffer) GetPartData(partIndex int) ([]byte, error) {
+	if err := b.checkPart(partIndex); err != nil {
+		return nil, err
+	}
+
 	var size C.size_t
 
 	data := C.arv_buffer_get_part_data(
@@ -278,9 +399,13 @@ func (b *Buffer) GetPartData(partIndex int) ([]byte, error) {
 // what the part represents (intensity, disparity, confidence, and so on) and
 // is the value FindComponent searches for.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// An index outside 0..GetNumParts-1 yields ErrPartOutOfRange, and a buffer
+// holding no ArvBuffer ErrNilBuffer.
 func (b *Buffer) GetPartComponentId(partIndex int) (uint, error) {
+	if err := b.checkPart(partIndex); err != nil {
+		return 0, err
+	}
+
 	componentId := C.arv_buffer_get_part_component_id(
 		b.buffer,
 		C.guint(partIndex),
@@ -294,9 +419,13 @@ func (b *Buffer) GetPartComponentId(partIndex int) (uint, error) {
 // confidence map, chunk data, and so on), wrapping
 // arv_buffer_get_part_data_type.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// An index outside 0..GetNumParts-1 yields ErrPartOutOfRange, and a buffer
+// holding no ArvBuffer ErrNilBuffer.
 func (b *Buffer) GetPartDataType(partIndex int) (int, error) {
+	if err := b.checkPart(partIndex); err != nil {
+		return 0, err
+	}
+
 	dataType := C.arv_buffer_get_part_data_type(
 		b.buffer,
 		C.guint(partIndex),
@@ -310,9 +439,16 @@ func (b *Buffer) GetPartDataType(partIndex int) (int, error) {
 // buffer may use different formats, so decode each part according to its own
 // value rather than the camera's current pixel format.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// Aravis grants the pixel format only for an image part, so this reports
+// ErrPartNotImage for a part that carries none — including every part of a
+// buffer that has not been filled by a successful acquisition. An index outside
+// 0..GetNumParts-1 yields ErrPartOutOfRange, and a buffer holding no ArvBuffer
+// ErrNilBuffer.
 func (b *Buffer) GetPartPixelFormat(partIndex int) (uint, error) {
+	if err := b.checkImagePart(partIndex); err != nil {
+		return 0, err
+	}
+
 	pixelFormat := C.arv_buffer_get_part_pixel_format(
 		b.buffer,
 		C.guint(partIndex),
@@ -349,39 +485,56 @@ func (b *Buffer) HasChunks() bool {
 // arv_buffer_get_part_width. Together with GetPartHeight, GetPartX and
 // GetPartY it describes the region the part covers.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// The four geometry accessors are granted by Aravis only for an image part, so
+// each reports ErrPartNotImage for a part that carries no geometry — including
+// every part of a buffer that has not been filled by a successful acquisition.
+// An index outside 0..GetNumParts-1 yields ErrPartOutOfRange, and a buffer
+// holding no ArvBuffer ErrNilBuffer.
 func (b *Buffer) GetPartWidth(partIndex int) (int, error) {
+	if err := b.checkImagePart(partIndex); err != nil {
+		return 0, err
+	}
+
 	width := C.arv_buffer_get_part_width(b.buffer, C.guint(partIndex))
+
 	return int(width), nil
 }
 
 // GetPartHeight returns the height in pixels of the part at partIndex,
-// wrapping arv_buffer_get_part_height.
-//
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// wrapping arv_buffer_get_part_height. See GetPartWidth for the errors it can
+// report.
 func (b *Buffer) GetPartHeight(partIndex int) (int, error) {
+	if err := b.checkImagePart(partIndex); err != nil {
+		return 0, err
+	}
+
 	height := C.arv_buffer_get_part_height(b.buffer, C.guint(partIndex))
+
 	return int(height), nil
 }
 
 // GetPartX returns the horizontal offset of the part at partIndex within the
-// sensor's coordinate system, wrapping arv_buffer_get_part_x.
-//
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// sensor's coordinate system, wrapping arv_buffer_get_part_x. See GetPartWidth
+// for the errors it can report.
 func (b *Buffer) GetPartX(partIndex int) (int, error) {
+	if err := b.checkImagePart(partIndex); err != nil {
+		return 0, err
+	}
+
 	x := C.arv_buffer_get_part_x(b.buffer, C.guint(partIndex))
+
 	return int(x), nil
 }
 
 // GetPartY returns the vertical offset of the part at partIndex within the
-// sensor's coordinate system, wrapping arv_buffer_get_part_y.
-//
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. partIndex is not range-checked.
+// sensor's coordinate system, wrapping arv_buffer_get_part_y. See GetPartWidth
+// for the errors it can report.
 func (b *Buffer) GetPartY(partIndex int) (int, error) {
+	if err := b.checkImagePart(partIndex); err != nil {
+		return 0, err
+	}
+
 	y := C.arv_buffer_get_part_y(b.buffer, C.guint(partIndex))
+
 	return int(y), nil
 }

@@ -76,6 +76,9 @@ in isolation.
 | `buffer_test.go` | the fresh-buffer contract and the filled-buffer accessors, including multipart |
 | `buffer_data_test.go` | `GetDataInto` clamping, overrun, empty dest, and its zero-allocation guarantee |
 | `stream_pop_test.go` | the three pops: the timeout sentinel, the negative and sub-microsecond timeout, the empty poll, the nil and closed stream, and a positive control under acquisition |
+| `buffer_close_test.go` | `Buffer.Close` across copies and on the zero value, the ownership hand-off through `PushBuffer`, and the arguments `PushBuffer` now rejects |
+| `buffer_parts_test.go` | the eight part accessors: out-of-range and negative indices, a non-image part, a nil buffer, and a real image part as the positive control |
+| `buffer_leak_linux_test.go` | `Buffer.Close` really releases the payload, measured as address space in `/proc/self/statm`. The `_linux` build suffix keeps it off other platforms without a `t.Skip` |
 | `device_guard_test.go` | the `Device` guards: the GigE-only control calls against a non-GigE device, the zero-size `ReadMemory`, the nil receiver, and `Camera.GetDevice`/`IsGVDevice` |
 | `lifecycle_test.go` | `Close` idempotence across copies, owned vs borrowed devices, control-lost handlers under `-race` |
 | `integration_test.go` | the full acquisition workflow and sustained streaming |

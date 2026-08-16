@@ -44,7 +44,11 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 			return
 		}
 
-		stream.PushBuffer(buffer)
+		if err := stream.PushBuffer(buffer); err != nil {
+			buffer.Close()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		// Start acquisition
 		if err := camera.StartAcquisition(); err != nil {
@@ -58,6 +62,12 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// The pop transfers the buffer back to us, and Stream.Close frees only
+		// what is still in the stream's queues, so this handler used to leak a
+		// whole frame per request on either of the two error paths below.
+		defer buffer.Close()
+
 		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
 			http.Error(w, fmt.Sprintf("buffer not ready: status %d", s), http.StatusInternalServerError)
 			return
