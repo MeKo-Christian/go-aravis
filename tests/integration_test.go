@@ -1,353 +1,241 @@
 package tests
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
 	aravis "github.com/MeKo-Christian/go-aravis"
 )
 
-// TestFullWorkflow tests a complete camera workflow from discovery to image acquisition.
+// TestFullWorkflow drives the whole acquisition sequence end to end: connect,
+// configure, create a stream, fill it with buffers, acquire, and hand each
+// buffer back.
+//
+// It used to skip whenever no camera was attached, so in CI it never ran and
+// its assertions were dead. It now runs against the Fake backend; only the
+// -short gate remains, because it still costs a real acquisition.
 func TestFullWorkflow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Step 1: Device discovery
-	t.Log("Step 1: Device discovery")
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil {
-		t.Fatalf("Failed to get device count: %v", err)
-	}
-
-	if numDevices == 0 {
-		t.Skip("No cameras connected, skipping integration test")
-		return
-	}
-
-	t.Logf("Found %d device(s)", numDevices)
-
-	// Step 2: Camera connection
-	t.Log("Step 2: Camera connection")
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Fatalf("Failed to get device ID: %v", err)
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		t.Fatalf("Failed to create camera: %v", err)
-	}
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
-	t.Logf("Connected to camera: %s", deviceId)
-
-	// Step 3: Camera information gathering
-	t.Log("Step 3: Camera information")
-	testCameraInformation(t, camera)
-
-	// Step 4: Camera configuration
-	t.Log("Step 4: Camera configuration")
-	testCameraConfiguration(t, camera)
-
-	// Step 5: Stream creation and buffer management
-	t.Log("Step 5: Stream and buffer setup")
-
-	stream, _ := testStreamSetup(t, camera)
-	if stream.IsNil() {
-		return // Skip if stream setup failed
+	if err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS); err != nil {
+		t.Fatalf("SetAcquisitionMode(CONTINUOUS) returned error: %v", err)
 	}
+
+	stream, payloadSize := setUpStream(t, camera)
 	defer stream.Close()
 
-	// Step 6: Image acquisition
-	t.Log("Step 6: Image acquisition")
-	testImageAcquisition(t, camera, stream)
-
-	t.Log("Integration test completed successfully")
+	acquireFrames(t, camera, stream, payloadSize)
 }
 
-func testCameraInformation(t *testing.T, camera aravis.Camera) {
-	vendor, err := camera.GetVendorName()
-	if err == nil {
-		t.Logf("  Vendor: %s", vendor)
-	}
+// setUpStream creates a stream and primes it with buffers, returning the
+// payload size the caller needs to size its own destination buffer.
+func setUpStream(t *testing.T, camera aravis.Camera) (aravis.Stream, uint) {
+	t.Helper()
 
-	model, err := camera.GetModelName()
-	if err == nil {
-		t.Logf("  Model: %s", model)
-	}
-
-	serial, err := camera.GetDeviceSerialNumber()
-	if err == nil {
-		t.Logf("  Serial: %s", serial)
-	}
-
-	width, err := camera.GetWidth()
-	if err == nil {
-		t.Logf("  Width: %d", width)
-	}
-
-	height, err := camera.GetHeight()
-	if err == nil {
-		t.Logf("  Height: %d", height)
-	}
-
-	payloadSize, err := camera.GetPayloadSize()
-	if err == nil {
-		t.Logf("  Payload size: %d bytes", payloadSize)
-	}
-}
-
-func testCameraConfiguration(t *testing.T, camera aravis.Camera) {
-	// Set acquisition mode
-	err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS)
-	if err != nil {
-		t.Logf("  Failed to set acquisition mode: %v", err)
-	} else {
-		t.Log("  Set acquisition mode to continuous")
-	}
-
-	// Get and potentially adjust frame rate
-	originalFPS, err := camera.GetFrameRate()
-	if err == nil {
-		t.Logf("  Original frame rate: %.2f FPS", originalFPS)
-
-		// Try to set a conservative frame rate
-		testFPS := 5.0 // 5 FPS should be safe for most cameras
-
-		err = camera.SetFrameRate(testFPS)
-		if err == nil {
-			t.Logf("  Set frame rate to %.2f FPS", testFPS)
-
-			// Restore original
-			camera.SetFrameRate(originalFPS)
-			t.Log("  Restored original frame rate")
-		} else {
-			t.Logf("  Failed to set frame rate: %v", err)
-		}
-	}
-
-	// Get and potentially adjust exposure
-	originalExposure, err := camera.GetExposureTime()
-	if err == nil {
-		t.Logf("  Original exposure: %.2f μs", originalExposure)
-	}
-
-	// Set thread priority
-	camera.ThreadPriority = aravis.ThreadPriorityHigh
-
-	t.Log("  Set thread priority to high")
-}
-
-func testStreamSetup(t *testing.T, camera aravis.Camera) (aravis.Stream, []aravis.Buffer) {
-	// Create stream
 	stream, err := camera.CreateStream()
 	if err != nil {
-		t.Errorf("  Failed to create stream: %v", err)
-		return aravis.Stream{}, nil
+		t.Fatalf("CreateStream() returned error: %v", err)
 	}
 
-	t.Log("  Created stream")
-
-	// Get payload size for buffer creation
 	payloadSize, err := camera.GetPayloadSize()
 	if err != nil {
-		t.Errorf("  Failed to get payload size: %v", err)
 		stream.Close()
-
-		return aravis.Stream{}, nil
+		t.Fatalf("GetPayloadSize() returned error: %v", err)
 	}
 
-	// Create buffers
-	numBuffers := 5
-	buffers := make([]aravis.Buffer, numBuffers)
+	const numBuffers = 5
 
 	for i := range numBuffers {
 		buffer, err := aravis.NewBuffer(payloadSize)
 		if err != nil {
-			t.Errorf("  Failed to create buffer %d: %v", i, err)
 			stream.Close()
-
-			return aravis.Stream{}, nil
+			t.Fatalf("NewBuffer(%d) for buffer %d returned error: %v", payloadSize, i, err)
 		}
 
-		buffers[i] = buffer
 		stream.PushBuffer(buffer)
 	}
 
-	t.Logf("  Created %d buffers of %d bytes each", numBuffers, payloadSize)
-
-	return stream, buffers
+	return stream, payloadSize
 }
 
-func testImageAcquisition(t *testing.T, camera aravis.Camera, stream aravis.Stream) {
-	// Start acquisition
-	err := camera.StartAcquisition()
-	if err != nil {
-		t.Errorf("  Failed to start acquisition: %v", err)
-		return
+// acquireFrames pops frames until it has the number it wants or the stream
+// stops delivering, checking each one.
+func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, payloadSize uint) {
+	t.Helper()
+
+	if err := camera.StartAcquisition(); err != nil {
+		t.Fatalf("StartAcquisition() returned error: %v", err)
 	}
-	defer camera.StopAcquisition()
 
-	t.Log("  Started acquisition")
+	defer func() {
+		if err := camera.StopAcquisition(); err != nil {
+			t.Errorf("StopAcquisition() returned error: %v", err)
+		}
+	}()
 
-	// Capture a few frames
+	const maxFrames = 10
+
 	framesAcquired := 0
-	maxFrames := 10
-	timeout := 1000 * time.Millisecond
 
 	for framesAcquired < maxFrames {
-		buffer, err := stream.TimeoutPopBuffer(timeout)
+		buffer, err := stream.TimeoutPopBuffer(time.Second)
 		if err != nil {
-			t.Logf("  Frame %d: timeout (%v)", framesAcquired, err)
+			t.Logf("stopped after %d frames: %v", framesAcquired, err)
+
 			break
 		}
 
-		// Check buffer status
 		status, err := buffer.GetStatus()
 		if err != nil {
-			t.Errorf("  Failed to get buffer status: %v", err)
+			t.Errorf("GetStatus() on frame %d returned error: %v", framesAcquired, err)
 			stream.PushBuffer(buffer)
 
 			continue
 		}
 
-		if status == aravis.BUFFER_STATUS_SUCCESS {
-			// Test different data access methods
-			testFrameDataAccess(t, buffer, framesAcquired)
-			framesAcquired++
-		} else {
-			t.Logf("  Frame %d: status %d", framesAcquired, status)
+		// The Fake backend drops no packets, so anything but SUCCESS is a real
+		// failure rather than the flaky-network case a hardware run allows for.
+		if status != aravis.BUFFER_STATUS_SUCCESS {
+			t.Errorf("frame %d has status %d, want %d (SUCCESS)",
+				framesAcquired, status, aravis.BUFFER_STATUS_SUCCESS)
+			stream.PushBuffer(buffer)
+
+			continue
 		}
 
-		// Return buffer to stream
+		checkFrameData(t, buffer, framesAcquired, payloadSize)
+
+		framesAcquired++
+
 		stream.PushBuffer(buffer)
 	}
 
-	t.Logf("  Successfully acquired %d frames", framesAcquired)
-
-	if framesAcquired == 0 {
-		t.Error("  No frames were successfully acquired")
+	if framesAcquired != maxFrames {
+		t.Errorf("acquired %d frames, want %d", framesAcquired, maxFrames)
 	}
 }
 
-func testFrameDataAccess(t *testing.T, buffer aravis.Buffer, frameNum int) {
-	// Test standard data access
+// checkFrameData asserts that the three copying accessors agree on a live
+// frame. The version this replaces compared data[0] and data[1] against the
+// zero-copy slice and logged the rest.
+func checkFrameData(t *testing.T, buffer aravis.Buffer, frameNum int, payloadSize uint) {
+	t.Helper()
+
 	data, err := buffer.GetData()
-	if err == nil && len(data) > 0 {
-		t.Logf("    Frame %d: GetData() returned %d bytes", frameNum, len(data))
+	if err != nil {
+		t.Errorf("frame %d: GetData() returned error: %v", frameNum, err)
 
-		// Test zero-copy access and compare
-		dataSlice, err := buffer.GetDataSlice()
-		if err == nil && len(dataSlice) > 0 {
-			if len(data) == len(dataSlice) {
-				t.Logf("    Frame %d: GetDataSlice() consistent size", frameNum)
+		return
+	}
 
-				// Compare first few bytes
-				if len(data) > 4 && len(dataSlice) > 4 {
-					if data[0] == dataSlice[0] && data[1] == dataSlice[1] {
-						t.Logf("    Frame %d: Data consistency verified", frameNum)
-					} else {
-						t.Errorf("    Frame %d: Data inconsistency detected", frameNum)
-					}
-				}
-			} else {
-				t.Errorf("    Frame %d: Size mismatch - GetData:%d vs GetDataSlice:%d",
-					frameNum, len(data), len(dataSlice))
-			}
-		}
+	if uint(len(data)) != payloadSize {
+		t.Errorf("frame %d: GetData() returned %d bytes, want the payload size %d",
+			frameNum, len(data), payloadSize)
+	}
 
-		// Test pre-allocated buffer copy
-		destBuffer := make([]byte, len(data))
+	slice, err := buffer.GetDataSlice()
+	if err != nil {
+		t.Errorf("frame %d: GetDataSlice() returned error: %v", frameNum, err)
 
-		bytesRead, err := buffer.GetDataInto(destBuffer)
-		if err == nil {
-			t.Logf("    Frame %d: GetDataInto() copied %d bytes", frameNum, bytesRead)
-		}
-	} else if err != nil {
-		t.Logf("    Frame %d: GetData() failed: %v", frameNum, err)
+		return
+	}
+
+	if !bytes.Equal(data, slice) {
+		t.Errorf("frame %d: GetData() and GetDataSlice() disagree", frameNum)
+	}
+
+	dest := make([]byte, len(data))
+
+	n, err := buffer.GetDataInto(dest)
+	if err != nil {
+		t.Errorf("frame %d: GetDataInto() returned error: %v", frameNum, err)
+
+		return
+	}
+
+	if n != len(data) {
+		t.Errorf("frame %d: GetDataInto() = %d, want %d", frameNum, n, len(data))
+	}
+
+	if !bytes.Equal(dest, data) {
+		t.Errorf("frame %d: GetDataInto() wrote bytes that differ from GetData()", frameNum)
 	}
 }
 
-// TestStreamingPerformance tests sustained streaming performance.
+// TestStreamingPerformance sustains a stream and checks the throughput
+// assertions that were previously unreachable in CI.
+//
+// The duration is short on purpose: the Fake camera runs at 25 FPS, so two
+// seconds is ~50 frames, which is plenty to catch a stream that stalls or
+// delivers nothing.
 func TestStreamingPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping streaming performance test in short mode")
 	}
 
-	aravis.UpdateDeviceList()
-
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil || numDevices == 0 {
-		t.Skip("No cameras connected, skipping streaming performance test")
-		return
-	}
-
-	deviceId, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Skip("Failed to get device ID")
-		return
-	}
-
-	camera, err := aravis.NewCamera(deviceId)
-	if err != nil {
-		t.Skip("Failed to create camera")
-		return
-	}
+	camera := requireFakeCamera(t)
 	defer camera.Close()
 
-	// Configure for performance
-	camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS)
-	camera.SetFrameRate(30.0) // Try for 30 FPS
+	if err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS); err != nil {
+		t.Fatalf("SetAcquisitionMode(CONTINUOUS) returned error: %v", err)
+	}
+
 	camera.ThreadPriority = aravis.ThreadPriorityHigh
 
 	stream, err := camera.CreateStream()
 	if err != nil {
-		t.Fatalf("Failed to create stream: %v", err)
+		t.Fatalf("CreateStream() returned error: %v", err)
 	}
+
 	defer stream.Close()
 
-	// Setup buffers
 	payloadSize, err := camera.GetPayloadSize()
 	if err != nil {
-		t.Fatalf("Failed to get payload size: %v", err)
+		t.Fatalf("GetPayloadSize() returned error: %v", err)
 	}
 
-	numBuffers := 10 // More buffers for high-speed streaming
+	const numBuffers = 10
+
 	for range numBuffers {
 		buffer, err := aravis.NewBuffer(payloadSize)
 		if err != nil {
-			t.Fatalf("Failed to create buffer: %v", err)
+			t.Fatalf("NewBuffer(%d) returned error: %v", payloadSize, err)
 		}
 
 		stream.PushBuffer(buffer)
 	}
 
-	// Start acquisition
-	err = camera.StartAcquisition()
-	if err != nil {
-		t.Fatalf("Failed to start acquisition: %v", err)
+	if err := camera.StartAcquisition(); err != nil {
+		t.Fatalf("StartAcquisition() returned error: %v", err)
 	}
-	defer camera.StopAcquisition()
 
-	// Stream for 5 seconds and measure performance
-	startTime := time.Now()
-	testDuration := 5 * time.Second
-	frameCount := 0
-	errorCount := 0
-	timeoutCount := 0
+	defer func() {
+		if err := camera.StopAcquisition(); err != nil {
+			t.Errorf("StopAcquisition() returned error: %v", err)
+		}
+	}()
 
-	destBuffer := make([]byte, payloadSize) // Pre-allocated for zero-allocation copies
+	const testDuration = 2 * time.Second
 
-	t.Log("Starting streaming performance test...")
+	var (
+		startTime    = time.Now()
+		frameCount   int
+		errorCount   int
+		timeoutCount int
+		destBuffer   = make([]byte, payloadSize)
+	)
 
 	for time.Since(startTime) < testDuration {
 		buffer, err := stream.TimeoutPopBuffer(100 * time.Millisecond)
 		if err != nil {
 			timeoutCount++
+
 			continue
 		}
 
@@ -362,9 +250,11 @@ func TestStreamingPerformance(t *testing.T) {
 
 		frameCount++
 
-		// Use optimized data access every 10th frame to test performance
+		// Exercise the zero-allocation copy on the way past.
 		if frameCount%10 == 0 {
-			_, _ = buffer.GetDataInto(destBuffer) // Zero-allocation copy
+			if _, err := buffer.GetDataInto(destBuffer); err != nil {
+				t.Errorf("GetDataInto() on frame %d returned error: %v", frameCount, err)
+			}
 		}
 
 		stream.PushBuffer(buffer)
@@ -373,49 +263,45 @@ func TestStreamingPerformance(t *testing.T) {
 	elapsed := time.Since(startTime)
 	fps := float64(frameCount) / elapsed.Seconds()
 
-	t.Logf("Streaming performance results:")
-	t.Logf("  Duration: %.2f seconds", elapsed.Seconds())
-	t.Logf("  Frames acquired: %d", frameCount)
-	t.Logf("  Timeouts: %d", timeoutCount)
-	t.Logf("  Errors: %d", errorCount)
-	t.Logf("  Average FPS: %.2f", fps)
-	t.Logf("  Data rate: %.2f MB/s", fps*float64(payloadSize)/1024/1024)
+	t.Logf("%d frames in %.2fs (%.2f FPS, %.2f MB/s), %d timeouts, %d errors",
+		frameCount, elapsed.Seconds(), fps, fps*float64(payloadSize)/1024/1024, timeoutCount, errorCount)
 
-	// Basic performance expectations
 	if frameCount == 0 {
-		t.Error("No frames acquired during performance test")
+		t.Error("no frames acquired")
 	}
 
 	if fps < 1.0 {
-		t.Error("Frame rate is very low (< 1 FPS), check camera configuration")
+		t.Errorf("average frame rate %.2f FPS is below 1 FPS", fps)
 	}
 
-	if errorCount > frameCount/2 {
-		t.Errorf("High error rate: %d errors out of %d attempts", errorCount, frameCount+errorCount+timeoutCount)
+	// Fake delivers every frame intact, so unlike a hardware run this tolerates
+	// no bad buffers at all.
+	if errorCount != 0 {
+		t.Errorf("%d buffers came back with a non-success status; want 0 on the Fake backend", errorCount)
 	}
 }
 
-// TestMultipleDevices tests operations with multiple cameras if available.
+// TestMultipleDevices is the one test that genuinely cannot run without
+// hardware: Aravis's Fake interface produces exactly one device, Fake_1, and
+// offers no way to ask for a second, so independent-camera operation cannot be
+// exercised against it.
+//
+// Run it with ARAVIS_TEST_HARDWARE=1 and two cameras attached (see
+// `make test-integration`).
 func TestMultipleDevices(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping multiple device test in short mode")
 	}
 
-	aravis.UpdateDeviceList()
-
 	numDevices, err := aravis.GetNumDevices()
 	if err != nil {
-		t.Fatalf("Failed to get device count: %v", err)
+		t.Fatalf("GetNumDevices() returned error: %v", err)
 	}
 
 	if numDevices < 2 {
-		t.Skip("Less than 2 cameras connected, skipping multiple device test")
-		return
+		t.Skipf("%d device(s) present; this test needs two, which the Fake backend cannot provide", numDevices)
 	}
 
-	t.Logf("Testing with %d devices", numDevices)
-
-	// Test creating cameras for all devices
 	cameras := make([]aravis.Camera, 0, numDevices)
 
 	defer func() {
@@ -425,36 +311,35 @@ func TestMultipleDevices(t *testing.T) {
 	}()
 
 	for i := range numDevices {
-		deviceId, err := aravis.GetDeviceId(i)
+		deviceID, err := aravis.GetDeviceId(i)
 		if err != nil {
-			t.Errorf("Failed to get device ID for device %d: %v", i, err)
+			t.Errorf("GetDeviceId(%d) returned error: %v", i, err)
+
 			continue
 		}
 
-		camera, err := aravis.NewCamera(deviceId)
+		camera, err := aravis.NewCamera(deviceID)
 		if err != nil {
-			t.Errorf("Failed to create camera for device %d (%s): %v", i, deviceId, err)
+			t.Errorf("NewCamera(%s) returned error: %v", deviceID, err)
+
 			continue
 		}
 
 		cameras = append(cameras, camera)
-
-		t.Logf("Successfully created camera %d: %s", i, deviceId)
 	}
 
-	if len(cameras) == 0 {
-		t.Fatal("Failed to create any cameras")
+	if len(cameras) != int(numDevices) {
+		t.Fatalf("opened %d of %d devices", len(cameras), numDevices)
 	}
 
-	// Test basic operations on all cameras
+	// Each camera must answer for itself rather than aliasing another's device.
 	for i, camera := range cameras {
-		vendor, _ := camera.GetVendorName()
-		model, _ := camera.GetModelName()
-		t.Logf("Camera %d: %s %s", i, vendor, model)
+		if _, err := camera.GetVendorName(); err != nil {
+			t.Errorf("camera %d: GetVendorName() returned error: %v", i, err)
+		}
 
-		// Test that cameras can be configured independently
-		camera.ThreadPriority = aravis.ThreadPriorityNormal
+		if _, err := camera.GetDeviceSerialNumber(); err != nil {
+			t.Errorf("camera %d: GetDeviceSerialNumber() returned error: %v", i, err)
+		}
 	}
-
-	t.Logf("Successfully tested %d cameras", len(cameras))
 }
