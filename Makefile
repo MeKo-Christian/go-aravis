@@ -79,17 +79,17 @@ build-examples:
 
 test: ## Run tests
 	@echo "$(BOLD)Running tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./...
 	@echo "$(GREEN)✓ Tests completed$(NC)"
 
 test-all: ## Run all tests including integration
 	@echo "$(BOLD)Running all tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./...
 	@echo "$(GREEN)✓ All tests completed$(NC)"
 
 test-unit: ## Run unit tests only (mock/stub tests)
 	@echo "$(BOLD)Running unit tests...$(NC)"
-	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/ -run "TestMock|TestError|TestStructural|TestConstants|TestBoundary"
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./... -run "TestMock|TestError|TestNewAravisError|TestStructural|TestConstants|TestBoundary|TestToBool|TestGetDataInto|TestBayer"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
 test-integration: ## Run integration tests (requires camera)
