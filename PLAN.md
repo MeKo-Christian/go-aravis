@@ -183,6 +183,8 @@ hard-deprecated. The library stays on Aravis 0.8 (current stable).
 
 ### Suggested execution order
 
-1. P0 correctness bugs (safety) → 2. P4 build/CI (so changes are verifiable) →
-2. P5 pure-Go tests (lock in behavior) → 4. P1/P2 API + perf machinery →
-3. P3 docs (describe the now-true reality).
+1. P0 correctness bugs (safety)
+2. P4 build/CI (so changes are verifiable)
+3. P5 pure-Go tests (lock in behavior)
+4. P1/P2 API + perf machinery
+5. P3 docs (describe the now-true reality)

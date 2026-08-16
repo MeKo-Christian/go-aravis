@@ -7,8 +7,12 @@ package aravis
 // // pointer for it forces cgo to heap-allocate the local on every call, which
 // // is the only allocation left in the hot GetDataInto path. Returning both
 // // values in a struct keeps every pointer on the C side, so the accessors
-// // below allocate nothing. (#cgo noescape would also work, but it requires a
-// // Go 1.23 language version and this module still supports the 1.23 baseline.)
+// // below allocate nothing.
+// //
+// // #cgo noescape would fix the same allocation, but the Go 1.23 toolchain
+// // rejects it ("#cgo noescape disabled until Go 1.23") even when go.mod
+// // declares go 1.23 — its own version gate is off by one, so the directive
+// // only works from Go 1.24 onwards. This wrapper needs no minimum version.
 // typedef struct {
 //     const void *data;
 //     size_t size;

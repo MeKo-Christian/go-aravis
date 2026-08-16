@@ -37,7 +37,10 @@ gain, err := camera.GetGainFast()
 ### Performance Impact
 
 - **20-40% faster** for parameter access operations
-- **Zero memory allocations** for common GenICam features
+- **Zero memory allocations** for the common GenICam features interned at
+  startup. A feature name outside that set falls back to a temporary C string
+  per call, so the cache cannot grow without bound when names are generated at
+  runtime or come from user input
 - Particularly beneficial in streaming loops that adjust parameters
 
 ## Zero-Copy Buffer Access
@@ -110,8 +113,11 @@ if err != nil {
 
 ### Features
 
-- **Pre-allocated common errors** - No string allocations for frequent errors
+- **Stable messages for known error codes** - Common Aravis device errors use a
+  fixed message table instead of converting the GLib string
 - **Error code access** - Structured error information
+- **Caller-owned errors** - Every error is freshly allocated, so callers can
+  never mutate shared state
 
 ### Usage
 
@@ -253,6 +259,7 @@ Based on testing with typical GigE Vision cameras:
 
 All performance optimizations maintain the same thread safety characteristics as the original methods:
 
-- String caching is thread-safe with read-write mutexes
+- The string cache is filled once at startup and never written again, so reads
+  need no locking
 - Buffer operations require external synchronization as before
 - Error handling optimizations are thread-safe

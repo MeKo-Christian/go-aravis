@@ -47,7 +47,16 @@ func newAravisError(code int, glibMessage string) *AravisError {
 
 func errorFromGError(gerr *C.GError) error {
 	defer C.g_error_free(gerr)
-	return newAravisError(int(gerr.code), goString(gerr.message))
+
+	// Convert the GLib message only when no stable message exists for this
+	// code. goString allocates, and for a mapped code the result would be
+	// built and then thrown away.
+	code := int(gerr.code)
+	if _, mapped := errorMessages[code]; mapped {
+		return newAravisError(code, "")
+	}
+
+	return newAravisError(code, goString(gerr.message))
 }
 
 func goString(cstr *C.gchar) string {
