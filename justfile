@@ -37,6 +37,7 @@ bench_flags := "-benchmem -run '^$' -benchtime=" + benchtime
 
 # Colors for output
 
+red := '\033[0;31m'
 green := '\033[0;32m'
 yellow := '\033[0;33m'
 blue := '\033[0;34m'
@@ -118,6 +119,27 @@ test-coverage:
     {{ go }} tool cover -func=coverage.out | tail -1
     @echo -e "{{ green }}✓ Coverage report generated: coverage.html{{ nc }}"
 
+# A GLib CRITICAL means an Aravis function was called outside its preconditions.
+# tests/README.md documented the grep for it since P5; this runs it. WARNING is
+# not matched: Aravis emits one for an unknown interface name, which
+# TestEnableDisableInterfaceChangesDiscovery provokes deliberately. The output
+# file is reused when present, which is how CI checks the run it already paid
+# for.
+
+# Fail if the test suite produced GLib CRITICAL output
+test-glib-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ bold }}Checking the test output for GLib diagnostics...{{ nc }}"
+    if [ ! -f test-output.txt ]; then
+        {{ go }} test -v ./... 2>&1 | tee test-output.txt
+    fi
+    if grep -nE 'CRITICAL \*\*|-CRITICAL' test-output.txt; then
+        echo -e "{{ red }}✗ GLib reported the lines above{{ nc }}"
+        exit 1
+    fi
+    echo -e "{{ green }}✓ No GLib CRITICAL output{{ nc }}"
+
 # Run benchmarks
 benchmark:
     @echo -e "{{ bold }}Running benchmarks...{{ nc }}"
@@ -173,7 +195,7 @@ verify:
 clean:
     @echo -e "{{ bold }}Cleaning build artifacts...{{ nc }}"
     rm -rf {{ bin_dir }}
-    rm -f coverage.out coverage.html
+    rm -f coverage.out coverage.html test-output.txt
     {{ go }} clean -cache
     @echo -e "{{ green }}✓ Clean completed{{ nc }}"
 
