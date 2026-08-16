@@ -186,15 +186,10 @@ func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 		return Buffer{}, err
 	}
 
-	if t < 0 {
-		return Buffer{}, ErrNegativeTimeout
+	microseconds, err := timeoutMicroseconds(t)
+	if err != nil {
+		return Buffer{}, err
 	}
-
-	// Round up rather than truncate: rounding down turns a requested wait of
-	// less than a microsecond into no wait at all, which is the shape of the
-	// historical TimeoutPopBuffer(1000) = 1 µs defect. Rounding up can never do
-	// that. Callers passing a microsecond or more see no difference.
-	microseconds := (int64(t) + int64(time.Microsecond) - 1) / int64(time.Microsecond)
 
 	buffer := C.arv_stream_timeout_pop_buffer(s.stream, C.guint64(microseconds))
 	if buffer == nil {
