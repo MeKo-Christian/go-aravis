@@ -56,7 +56,11 @@
 //	}
 //	// A popped buffer belongs to us, so give it back: push it to keep the queue
 //	// full, or Close it to release it.
-//	defer stream.PushBuffer(buffer)
+//	defer func() {
+//		if err := stream.PushBuffer(buffer); err != nil {
+//			log.Printf("returning the buffer: %v", err)
+//		}
+//	}()
 //
 //	if status, _ := buffer.GetStatus(); status == aravis.BUFFER_STATUS_SUCCESS {
 //		data, _ := buffer.GetData()
