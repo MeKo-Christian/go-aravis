@@ -10,28 +10,45 @@ import (
 	"unsafe"
 )
 
+// GetDeviceId returns the id of the device at index in the device list, which
+// can be passed to [NewCamera] or [OpenDevice]. Call [UpdateDeviceList] before
+// enumerating; index must be less than the count returned by [GetNumDevices].
 func GetDeviceId(index uint) (string, error) {
 	s, err := C.arv_get_device_id(C.uint(index))
 	return C.GoString(s), err
 }
 
+// GetInterfaceId returns the id of the interface at index, for example "GigEVision"
+// or "USB3Vision". The index must be less than the count returned by
+// [GetNumInterface]. The id is what [EnableInterface] and [DisableInterface]
+// expect.
 func GetInterfaceId(index uint) (string, error) {
 	s, err := C.arv_get_interface_id(C.uint(index))
 	return C.GoString(s), err
 }
 
+// DisableInterface removes the interface with the given id from the list of
+// interfaces scanned by [UpdateDeviceList], so its devices are no longer
+// discovered. Unknown ids are ignored.
 func DisableInterface(id string) {
 	cs := C.CString(id)
 	C.arv_disable_interface(cs)
 	C.free(unsafe.Pointer(cs))
 }
 
+// EnableInterface adds the interface with the given id back to the list of
+// interfaces scanned by [UpdateDeviceList]. All supported interfaces are
+// enabled by default, so this is only needed after [DisableInterface].
+// Unknown ids are ignored.
 func EnableInterface(id string) {
 	cs := C.CString(id)
 	C.arv_enable_interface(cs)
 	C.free(unsafe.Pointer(cs))
 }
 
+// GetNumDevices returns the number of devices found by the last device scan.
+// Call [UpdateDeviceList] first, otherwise the count reflects an empty or
+// outdated list.
 func GetNumDevices() (uint, error) {
 	n, err := C.arv_get_n_devices()
 	return uint(n), err
@@ -50,6 +67,10 @@ func GetNumInferface() (uint, error) {
 	return GetNumInterface()
 }
 
+// UpdateDeviceList scans all enabled interfaces and rebuilds the list of
+// available devices. It must be called before [GetNumDevices] and
+// [GetDeviceId], and again whenever devices may have been connected or
+// disconnected, because the list is only a snapshot of the last scan.
 func UpdateDeviceList() {
 	C.arv_update_device_list()
 }
@@ -86,6 +107,11 @@ func OpenDevice(id string) (Device, error) {
 	return d, nil
 }
 
+// Shutdown releases the resources held by the Aravis library: the cached
+// interface instances and their device lists, and the internal discovery
+// threads and sockets. Call it once when the application is done with Aravis,
+// after every camera, stream, buffer, and owned device has been closed. Using
+// this package afterwards restarts the library from a clean state.
 func Shutdown() {
 	C.arv_shutdown()
 }

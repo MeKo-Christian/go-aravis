@@ -74,9 +74,21 @@ func getCachedCString(s string) (cstr *C.char, mustFree bool) {
 	return C.CString(s), true
 }
 
-// Fast versions of common camera operations using cached strings
-// These eliminate C.CString allocations for maximum performance
+// Fast versions of common camera operations using cached strings.
+//
+// The *Fast methods behave exactly like their regular counterparts but look
+// their GenICam feature name up in the intern table built at startup instead of
+// converting it with C.CString on every call. Only names listed in
+// commonFeatures are served from that table; any other name still gets a
+// temporary C allocation that is freed before the call returns. The table is
+// never freed by design — it is bounded by the fixed set of feature names the
+// package interns, and the raw *C.char pointers it hands out have no lifetime
+// tracking that would make reclaiming them safe.
 
+// GetWidthFast returns the camera's current image width in pixels by reading
+// the "Width" integer feature. It is the allocation-free variant of the regular
+// width accessor: the feature name is interned, so no per-call C.CString
+// conversion happens.
 func (c *Camera) GetWidthFast() (int, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Width")
@@ -91,6 +103,9 @@ func (c *Camera) GetWidthFast() (int, error) {
 	return int(cvalue), err
 }
 
+// GetHeightFast returns the camera's current image height in pixels by reading
+// the "Height" integer feature. The feature name is interned, so the call
+// avoids a per-call C.CString conversion.
 func (c *Camera) GetHeightFast() (int, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Height")
@@ -105,6 +120,9 @@ func (c *Camera) GetHeightFast() (int, error) {
 	return int(cvalue), err
 }
 
+// SetExposureTimeFast sets the camera's exposure time in microseconds by
+// writing the "ExposureTime" float feature. The feature name is interned, so
+// the call avoids a per-call C.CString conversion.
 func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
 	var gerror *C.GError
 	var err error
@@ -119,6 +137,9 @@ func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
 	return err
 }
 
+// GetExposureTimeFast returns the camera's exposure time in microseconds by
+// reading the "ExposureTime" float feature. The feature name is interned, so
+// the call avoids a per-call C.CString conversion.
 func (c *Camera) GetExposureTimeFast() (float64, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("ExposureTime")
@@ -133,6 +154,9 @@ func (c *Camera) GetExposureTimeFast() (float64, error) {
 	return float64(cvalue), err
 }
 
+// SetGainFast sets the camera's gain by writing the "Gain" float feature. The
+// unit is camera specific. The feature name is interned, so the call avoids a
+// per-call C.CString conversion.
 func (c *Camera) SetGainFast(gain float64) error {
 	var gerror *C.GError
 	var err error
@@ -147,6 +171,9 @@ func (c *Camera) SetGainFast(gain float64) error {
 	return err
 }
 
+// GetGainFast returns the camera's gain by reading the "Gain" float feature.
+// The unit is camera specific. The feature name is interned, so the call avoids
+// a per-call C.CString conversion.
 func (c *Camera) GetGainFast() (float64, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString("Gain")
@@ -161,7 +188,18 @@ func (c *Camera) GetGainFast() (float64, error) {
 	return float64(cvalue), err
 }
 
-// Fast device feature access using cached strings
+// Fast device feature access using cached strings.
+//
+// The Device *Fast methods take the feature name from the caller and look it up
+// in the intern table instead of converting it with C.CString on every call.
+// Only names listed in commonFeatures are found there; any other name falls
+// back to a temporary allocation that is freed before the call returns, so
+// passing arbitrary names is correct but gains nothing. The table is fixed at
+// startup and never freed by design.
+
+// GetStringFeatureValueFast returns the value of the named GenICam string
+// feature. The feature name avoids a C.CString conversion when it is one of the
+// interned common feature names; other names are converted per call.
 func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
@@ -176,6 +214,9 @@ func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
 	return C.GoString(cvalue), err
 }
 
+// SetStringFeatureValueFast sets the named GenICam string feature to value.
+// Only the feature name can come from the intern table; value varies per call
+// and is always converted and freed.
 func (d *Device) SetStringFeatureValueFast(feature, value string) error {
 	var gerror *C.GError
 	var err error
@@ -195,6 +236,9 @@ func (d *Device) SetStringFeatureValueFast(feature, value string) error {
 	return err
 }
 
+// GetIntegerFeatureValueFast returns the value of the named GenICam integer
+// feature. The feature name avoids a C.CString conversion when it is one of the
+// interned common feature names; other names are converted per call.
 func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
@@ -209,6 +253,9 @@ func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 	return int64(cvalue), err
 }
 
+// SetIntegerFeatureValueFast sets the named GenICam integer feature to value.
+// The feature name avoids a C.CString conversion when it is one of the interned
+// common feature names; other names are converted per call.
 func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
 	var gerror *C.GError
 	var err error
@@ -223,6 +270,9 @@ func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
 	return err
 }
 
+// GetFloatFeatureValueFast returns the value of the named GenICam float
+// feature. The feature name avoids a C.CString conversion when it is one of the
+// interned common feature names; other names are converted per call.
 func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 	var gerror *C.GError
 	cfeature, mustFree := getCachedCString(feature)
@@ -237,6 +287,9 @@ func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 	return float64(cvalue), err
 }
 
+// SetFloatFeatureValueFast sets the named GenICam float feature to value. The
+// feature name avoids a C.CString conversion when it is one of the interned
+// common feature names; other names are converted per call.
 func (d *Device) SetFloatFeatureValueFast(feature string, value float64) error {
 	var gerror *C.GError
 	var err error
