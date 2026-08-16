@@ -15,8 +15,15 @@ Entries below cover changes made in this fork. Upstream history is in the git lo
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-16
+
 Changes since the last upstream commit. A quality review of the source, tests, docs,
 examples and CI produced the work tracked in `PLAN.md`; these are the results.
+
+`v0.1.0` was tagged part-way through that review, before this section was split into
+releases, so it is a snapshot of the same body of work rather than a separate set of
+changes. Everything below is present in `v0.2.0`; the subset that predates `v0.1.0` is
+identifiable from the git log, not from this file.
 
 ### Breaking
 
