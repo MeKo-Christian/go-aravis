@@ -54,6 +54,9 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   `SetGainAuto`.
 - `GetNumInterface`, replacing the misspelled `GetNumInferface`, which remains as a
   deprecated forwarding wrapper.
+- `Camera.GetGainAuto`, the missing counterpart to `SetGainAuto`. It wraps
+  `arv_camera_get_gain_auto` and returns one of the `AUTO_*` constants, so an automatic
+  gain mode can now be read back.
 - Tests that can fail: Bayer edge handling, error mapping and `toBool`, `GetDataInto`
   semantics including a `testing.AllocsPerRun` zero-allocation assertion, and a `-race`
   concurrency test for control-lost handlers. Buffer tests seed a real payload through
@@ -71,6 +74,16 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   preserves the CFA phase — clamping would collapse onto the current Bayer site and
   produce the wrong color on odd-sized images. The alpha channel was also `0` (fully
   transparent) instead of `0xff`.
+- **`BayerRG.At` used the wrong CFA phase for a rect with an odd origin.** It derived the
+  Bayer site from the absolute coordinates (`x&1`, `y&1`) while `sample` indexes `Pix`
+  relative to `Rect.Min`, so for any `Rect` with an odd `Min.X` or `Min.Y` red and blue
+  swapped and the green samples came from the wrong neighbors. The phase is now taken
+  relative to `Rect.Min`, so the first sample of `Pix` is red for any origin.
+- **`GetFrameRateBounds` and `GetGainBounds` wrote their C out-parameters through a
+  `*float64` reinterpreted as `*C.double`.** This is the same class as the 32/64-bit bug
+  above and worked only because Go `float64` and C `double` happen to be 8 bytes on the
+  supported platforms. Both now declare `C.double` locals and convert on return, as
+  `GetExposureTimeBounds` already did.
 - **Empty device id passed to Aravis as `""` instead of NULL.** Aravis documents NULL as
   the "first available device" sentinel, so `NewCamera("")` and `OpenDevice("")` asked for
   a device whose id is the empty string, which nothing matches.
