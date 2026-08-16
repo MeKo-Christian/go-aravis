@@ -59,7 +59,7 @@ func setUpStream(t *testing.T, camera aravis.Camera) (aravis.Stream, uint) {
 			t.Fatalf("NewBuffer(%d) for buffer %d returned error: %v", payloadSize, i, err)
 		}
 
-		stream.PushBuffer(buffer)
+		pushBack(t, stream, buffer)
 	}
 
 	return stream, payloadSize
@@ -123,7 +123,7 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 		// failure, return the buffer and stop.
 		if err != nil {
 			t.Errorf("GetStatus() on frame %d returned error: %v", framesAcquired, err)
-			stream.PushBuffer(buffer)
+			pushBack(t, stream, buffer)
 
 			break
 		}
@@ -134,7 +134,7 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 			if isFake {
 				t.Errorf("frame %d has status %d, want %d (SUCCESS)",
 					framesAcquired, status, aravis.BUFFER_STATUS_SUCCESS)
-				stream.PushBuffer(buffer)
+				pushBack(t, stream, buffer)
 
 				break
 			}
@@ -142,7 +142,7 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 			// On real hardware a dropped frame is not a test failure; retry
 			// until the pop above times out.
 			t.Logf("frame %d has status %d; retrying", framesAcquired, status)
-			stream.PushBuffer(buffer)
+			pushBack(t, stream, buffer)
 
 			continue
 		}
@@ -151,7 +151,7 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 
 		framesAcquired++
 
-		stream.PushBuffer(buffer)
+		pushBack(t, stream, buffer)
 	}
 
 	if framesAcquired != maxFrames {
@@ -246,7 +246,7 @@ func TestStreamingPerformance(t *testing.T) {
 			t.Fatalf("NewBuffer(%d) returned error: %v", payloadSize, err)
 		}
 
-		stream.PushBuffer(buffer)
+		pushBack(t, stream, buffer)
 	}
 
 	if err := camera.StartAcquisition(); err != nil {
@@ -288,7 +288,7 @@ func TestStreamingPerformance(t *testing.T) {
 		if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
 			errorCount++
 
-			stream.PushBuffer(buffer)
+			pushBack(t, stream, buffer)
 
 			continue
 		}
@@ -302,7 +302,7 @@ func TestStreamingPerformance(t *testing.T) {
 			}
 		}
 
-		stream.PushBuffer(buffer)
+		pushBack(t, stream, buffer)
 	}
 
 	elapsed := time.Since(startTime)

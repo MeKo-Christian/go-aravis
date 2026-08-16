@@ -36,6 +36,12 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   names, bounded by the feature set a program touches.
 - **`Reset()` removed** from the error type. It existed only to serve the deleted error
   pool and had no callers.
+- **`Stream.PushBuffer` now returns `error`.** It previously handed every argument
+  straight to Aravis: a nil stream and a nil buffer each trip a GLib assertion there, and
+  pushing a buffer the caller had already given up is a double free. It now returns
+  `ErrNilStream`, `ErrStreamClosed`, `ErrNilBuffer` or `ErrBufferNotOwned`. Statement and
+  `defer` calls compile unchanged; only assigning the method to a `func(aravis.Buffer)`
+  value breaks.
 - **Device setters now return `error`.** `SetStringFeatureValue`, `SetIntegerFeatureValue`,
   `SetFloatFeatureValue` and `SetNodeFeatureValue` previously discarded failures. The
   matching getters kept their signatures but changed behaviour — see *The generic
@@ -63,6 +69,15 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   semantics including a `testing.AllocsPerRun` zero-allocation assertion, and a `-race`
   concurrency test for control-lost handlers. Buffer tests seed a real payload through
   Aravis's built-in Fake backend, so they need no hardware.
+- **`Buffer.Close` and `Buffer.IsClosed`.** A buffer in the caller's hands could not be
+  released at all: `Stream.Close` frees only the buffers still in the stream's queues, so
+  a buffer that `NewBuffer` created and nothing ever pushed, and a popped buffer that was
+  never pushed back, both leaked with no way out. `Buffer` now carries the same shared
+  close flag as `Camera`, `Stream` and `Device`, so `Close` is idempotent across copies.
+  The flag doubles as an ownership flag, because ownership ping-pongs: `PushBuffer` claims
+  it (the parameter is `transfer-ownership="full"`), and each pop mints a new `Buffer`
+  with a new flag (the result is too). At most one Go value holds an unclaimed flag for a
+  given `ArvBuffer` at a time.
 - **Sentinel errors** in `errors.go`, so the conditions the package decides for itself can
   be matched with `errors.Is` instead of by string: `ErrTimeout`, `ErrNoBuffer`,
   `ErrNegativeTimeout`, `ErrNilStream`, `ErrStreamClosed`, `ErrNilBuffer`,
@@ -75,6 +90,21 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
 
 ### Fixed
 
+- **The part accessors did not range-check `partIndex`.** `GetPartData` and the seven
+  other accessors passed the index straight to Aravis, which asserted internally, logged a
+  GLib CRITICAL and returned 0 — a value the caller could not tell from a real width or
+  component id. A negative index was worse: `partIndex` is an `int` and the C parameter a
+  `guint`, so -1 arrived as 4294967295. All eight now check the index against
+  `GetNumParts` and return `ErrPartOutOfRange`, or `ErrNilBuffer` for a buffer holding no
+  `ArvBuffer`.
+- **The geometry accessors ignored the image-part precondition.** `GetPartWidth`,
+  `GetPartHeight`, `GetPartX`, `GetPartY` and `GetPartPixelFormat` are guarded inside
+  Aravis by `arv_buffer_part_is_image`, which is static in `arvbuffer.c` and absent from
+  the public header, so calling them on a part that carries no geometry produced
+  `assertion 'arv_buffer_part_is_image (buffer, part_id)' failed` and a 0. Its condition —
+  a successfully acquired buffer, an image, extended-chunk or multipart payload, and one
+  of nine part data types — is now reproduced in Go as an allow-list, so an unrecognised
+  future data type is rejected with `ErrPartNotImage` rather than reaching Aravis.
 - **A pop timeout was indistinguishable from a real failure.** `TimeoutPopBuffer` reported
   every empty result as a freshly allocated `errors.New`, which no `errors.Is` could match,
   so a dropped frame and a broken stream looked the same. Each pop now says what its empty

@@ -452,12 +452,39 @@ behavior is wrong. Ordered by severity.
       on `Device` reuse `check`, the six on `Camera` use `Camera.IsClosed`. Both halves
       are covered by `tests/fast_guard_test.go`, with an open-handle positive control so
       the guards cannot pass by rejecting everything.
-- [ ] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
+- [x] **A timeout is indistinguishable from a real failure.** `TimeoutPopBuffer` reports
       both as a freshly allocated `errors.New("aravis returned a null pointer")`, which
       is non-comparable, so callers cannot use `errors.Is` to detect a dropped frame.
       A package-level sentinel would fix it. Separately, a negative `time.Duration`
       converts to a huge unsigned value, turning a nonsensical timeout into an
       effectively infinite block.
+      **Resolved.** `errors.go` holds ten package-level sentinels, and each pop now says
+      what its own empty result means — read against `arvstream.c` for 0.8.30 rather than
+      assumed, because the three differ: `arv_stream_pop_buffer` blocks until a buffer
+      exists, so NULL there is only the `ARV_IS_STREAM` guard (`ErrNoBuffer`);
+      `arv_stream_timeout_pop_buffer` returns NULL on a genuine timeout (`ErrTimeout`);
+      and `arv_stream_try_pop_buffer` returns NULL for an empty output queue, which is the
+      *expected* result of a poll and is now a nil buffer with a **nil error**.
+      A negative duration returns `ErrNegativeTimeout`. Clamping to 0 was considered and
+      rejected: it makes a caller bug indistinguishable from a dropped frame, which is the
+      confusion this item exists to remove. The microsecond conversion also rounds up
+      instead of truncating — truncation is what produced the historical
+      `TimeoutPopBuffer(1000)` = 1 µs bug; rounding up can never turn a requested wait into
+      no wait, and nothing changes for a caller passing ≥ 1 µs.
+      All three, and `PushBuffer`, check the stream first: `ErrNilStream` for the zero
+      value, `ErrStreamClosed` for a released one. The nil case is what removed the
+      `ARV_IS_STREAM` CRITICAL; the closed case was added on the same reasoning PR B
+      applied to `Device`, since `Close` leaves the pointer in place and a dangling
+      `ArvStream` is worse than a NULL one — nothing inside Aravis catches it.
+      `tests/stream_pop_test.go` covers all of it, with a positive control under real
+      acquisition so the guards cannot pass by rejecting everything, and the negative
+      timeout runs in a goroutine behind a 2 s deadline so the pre-fix behaviour fails the
+      test instead of hanging the package. `errors_test.go` pins the sentinels themselves.
+      And `make test-glib-clean` finally *runs* the CRITICAL check `tests/README.md` has
+      documented since P5, in CI too, reusing the `test-output.txt` the skip guard already
+      produces. It matches CRITICAL only: Aravis emits a WARNING for an unknown interface
+      name, which `TestEnableDisableInterfaceChangesDiscovery` provokes deliberately, so
+      WARNING is not evidence of a defect here.
 - [x] **`BayerRG.At` uses the wrong CFA phase for an odd-origin rect.** `At` derived the
       phase from absolute `x&1`/`y&1` while `sample` indexes relative to `Rect.Min`, so
       for any rect with an odd `Min.X`/`Min.Y` every color was off by one Bayer site —
@@ -471,7 +498,7 @@ behavior is wrong. Ordered by severity.
       `image.Rect(0, 0, w, h)`, where absolute and relative coordinates coincide;
       `tests/bayer_test.go` now also debayers odd-origin rects and requires the same
       colors as the equivalent zero-origin image.
-- [ ] **A `Buffer` in the caller's hands cannot be freed.** `Buffer` has no `Close`, and
+- [x] **A `Buffer` in the caller's hands cannot be freed.** `Buffer` has no `Close`, and
       `Stream.Close` releases only the buffers still sitting in the stream's queues.
       Aravis gives ownership of a popped buffer to the caller
       (`arv_stream_pop_buffer` is `transfer-ownership="full"`), so *two* cases leak with
@@ -479,22 +506,73 @@ behavior is wrong. Ordered by severity.
       popped buffer that is never pushed back. Raised in PR review, where it also turned
       out the P3 docs had this backwards — they claimed a popped buffer stayed
       stream-owned. The docs are corrected; the API gap stands.
+      **Resolved.** `Buffer` gained `Close` and `IsClosed`, backed by the same shared
+      `*closeFlag` `Device` uses, so closing two copies unrefs once. The field is named
+      `owned` rather than `closed` because it carries more than a close state: ownership
+      **ping-pongs**, which the GIR confirms — `arv_stream_push_buffer`'s `buffer`
+      parameter is `transfer-ownership="full"` and the pops' results are too. So
+      `NewBuffer` mints a fresh flag, `PushBuffer` *claims* it (a push gives ownership back
+      to Aravis, which makes every copy of that Go value inert), and each pop mints a new
+      `Buffer` with a new flag. The invariant is that at most one Go `Buffer` value holds
+      an unclaimed flag for a given `ArvBuffer` at any instant.
+      `Stream.PushBuffer` therefore gained an `error` return — `ErrNilStream`,
+      `ErrStreamClosed`, `ErrNilBuffer`, `ErrBufferNotOwned`. All of those previously went
+      straight to Aravis, where the first three trip a GLib assertion and the last is a
+      double free. It is the one genuine source break: statement and `defer` calls still
+      compile, only assigning the method to a `func(aravis.Buffer)` value does not.
+      No finalizer, for the reason `doc.go` already gives: on a freely copied value type a
+      finalizer would unref while a copy is still live, trading a leak for a crash.
+      `Buffer` stays comparable — nothing compares buffers or uses one as a map key.
+      The leak is *observed*, not just reasoned about. Aravis has no allocation counter and
+      a GObject ref count cannot be read after the final unref, but `arv_buffer_new`
+      `g_malloc`s the payload, so 256 unreleased 1 MiB buffers are 256 MiB of address space
+      that `/proc/self/statm` reports. `tests/buffer_leak_linux_test.go` measures exactly
+      that — virtual size rather than RSS, since an untouched `g_malloc`'d buffer may never
+      fault a page in — and with `Close`'s `g_object_unref` commented out it fails by
+      269 MB against a 64 MB tolerance. The `_linux` build suffix keeps it off other
+      platforms without a `t.Skip`, so neither the CI skip regex nor the allowed-skip table
+      needed changing.
+      `examples/get_image` dropped a whole frame per HTTP request on two early-return
+      paths and now defers `buffer.Close()`; `examples/advanced_buffer` never returned its
+      one-shot frame and does the same; `examples/performance_demo` keeps a
+      `[]aravis.Buffer` of pre-push copies, which is exactly the shape the old model made
+      dangerous, and now says so.
 - [ ] **Narrow the return types of the accessors that cannot fail.** The errno fix left
       every signature intact, so a growing set of methods returns an `error` that is
       documented as always nil: `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`,
-      `GetDataInto`, `GetStatus`, `GetNumParts`, `GetPartData`, `GetPartComponentId`,
-      `GetPartDataType`, `GetPartPixelFormat`, `GetPartWidth`, `GetPartHeight`,
-      `GetPartX`, `GetPartY`, `FindComponent`, `Stream.PopBuffer`,
-      `Stream.TryPopBuffer`, and the four package-level accessors `GetDeviceId`,
-      `GetInterfaceId`, `GetNumDevices`, `GetNumInterface`. Dropping the `error` is a
-      breaking change at every call site, so it is deliberately deferred and should land
-      in one sweep together with the remaining P6 API changes (`Stream.PushBuffer`
-      gaining an `error`, `Buffer.Close`, the part range checks) — callers then migrate
-      once instead of three times. `unparam` is enabled in `.golangci.toml` and does not
-      fire on these, so the interim state stays lint-clean.
-- [ ] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
-      against `GetNumParts`. Still open; the other two items of this bullet are done.
-      **Resolved:** `SetGainAuto` now has a `GetGainAuto` counterpart wrapping
+      `GetDataInto`, `GetStatus`, `GetNumParts`, `FindComponent`, and the four
+      package-level accessors `GetDeviceId`, `GetInterfaceId`, `GetNumDevices`,
+      `GetNumInterface`. Dropping the `error` is a breaking change at every call site, so
+      it stays deferred and should land in one deliberate sweep. The list is shorter than
+      it was: the eight part accessors and the three pops report real errors now, so they
+      have left it, and the API changes it was waiting to travel with (`Stream.PushBuffer`
+      gaining an `error`, `Buffer.Close`, the part range checks) have landed. `unparam` is
+      enabled in `.golangci.toml` and does not fire on these, so the interim state stays
+      lint-clean.
+- [x] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
+      against `GetNumParts`.
+      **Resolved.** An unexported `checkPart` validates the index — including a negative
+      one, which mattered more than it looks: `partIndex` is an `int` and the C parameter a
+      `guint`, so -1 reached Aravis as 4294967295. A nil `ArvBuffer` is rejected first,
+      since `arv_buffer_get_n_parts` asserts `ARV_IS_BUFFER` too.
+      `checkImagePart` covers the second precondition, the
+      `assertion 'arv_buffer_part_is_image (buffer, part_id)' failed` case recorded above.
+      That helper is **static in `arvbuffer.c` and not in the public header**, so its
+      condition is transcribed from the 0.8.30 source rather than guessed: a buffer whose
+      status is SUCCESS, a payload type of IMAGE, EXTENDED_CHUNK_DATA or MULTIPART, and a
+      part data type in an allow-list of nine (2D and 3D images with their planar variants,
+      plus confidence maps). Allow-list, not deny-list: an unrecognised future type is then
+      rejected with a Go error instead of reaching Aravis and producing a CRITICAL.
+      Reading the source corrected the plan on one point — `arv_buffer_get_part_pixel_format`
+      is guarded by `arv_buffer_part_is_image` as well, so it takes `checkImagePart` and not
+      the plain range check, making five image accessors rather than four.
+      Empirically, `GetPartWidth(0)` on a fresh `NewBuffer` yields `ErrPartNotImage` and not
+      `ErrPartOutOfRange`: `arv_buffer_new` sets `n_parts = 1`, so index 0 is in range, but
+      the status is CLEARED and the payload type UNKNOWN. `tests/buffer_parts_test.go`
+      asserts that rather than accepting either, and covers all eight accessors against
+      {-1, n, n+1}, the non-image part, and a nil buffer — with a real acquired frame as the
+      positive control, so an over-strict allow-list would be caught.
+      `SetGainAuto` also gained a `GetGainAuto` counterpart wrapping
       `arv_camera_get_gain_auto`, and `GetFrameRateBounds`/`GetGainBounds` declare
       `C.double` out-parameters instead of reinterpreting `*float64` through
       `unsafe.Pointer`, matching `GetExposureTimeBounds`. All three bounds accessors and
@@ -510,5 +588,8 @@ behavior is wrong. Ordered by severity.
 5. P3 docs (describe the now-true reality) — done
 6. P5 tests (make the suite mean something) — done, except the deferred
    C-call seam
-7. P6 correctness bugs surfaced by the P3 doc pass — next. The suite that
-   lands them is now one that can fail.
+7. P6 correctness bugs surfaced by the P3 doc pass — done, across four themed
+   PRs: the error contract, the device guards, the Bayer phase and minor camera
+   fixes, and buffer ownership with the pop sentinels. Two items remain open by
+   choice: narrowing the return types of the accessors that cannot fail, and the
+   C-call seam left over from P5.

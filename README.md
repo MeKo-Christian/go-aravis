@@ -134,6 +134,7 @@ func main() {
 package main
 
 import (
+    "errors"
     "fmt"
     "log"
     "time"
@@ -183,7 +184,10 @@ func main() {
         if err != nil {
             log.Fatal(err)
         }
-        stream.PushBuffer(buffer)
+        if err := stream.PushBuffer(buffer); err != nil {
+            buffer.Close()
+            log.Fatal(err)
+        }
     }
 
     // Start acquisition
@@ -198,30 +202,32 @@ func main() {
     frameCount := 0
     for frameCount < 100 {  // Capture 100 frames
         buffer, err := stream.TimeoutPopBuffer(time.Second)
-
-        // A popped buffer belongs to us, and a non-nil buffer can come back
-        // together with a non-nil error — so decide on IsNil, not on err.
-        // Skipping the push back would drain the queue and stall acquisition.
-        if buffer.IsNil() {
-            log.Printf("Frame timeout: %v", err)
+        if errors.Is(err, aravis.ErrTimeout) {
+            // No frame arrived in time. Not a failure — just try again.
+            log.Printf("Frame timeout")
             continue
         }
-
-        if err == nil {
-            // Check frame quality
-            status, _ := buffer.GetStatus()
-            if status == aravis.BUFFER_STATUS_SUCCESS {
-                data, _ := buffer.GetData()
-                fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
-                frameCount++
-
-                // Process your image data here
-                // ...
-            }
+        if err != nil {
+            log.Fatal(err)
         }
 
-        // Return buffer to stream
-        stream.PushBuffer(buffer)
+        // Check frame quality
+        status, _ := buffer.GetStatus()
+        if status == aravis.BUFFER_STATUS_SUCCESS {
+            data, _ := buffer.GetData()
+            fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
+            frameCount++
+
+            // Process your image data here
+            // ...
+        }
+
+        // A popped buffer belongs to us: give it back, or it leaks. Pushing it
+        // also keeps the queue full — skipping this would stall acquisition.
+        // Use buffer.Close() instead when the frame is the last one wanted.
+        if err := stream.PushBuffer(buffer); err != nil {
+            log.Fatal(err)
+        }
     }
 }
 ```
@@ -467,7 +473,8 @@ Three ways to get at pixel data, trading safety for copies:
 data, err := buffer.GetData()
 
 // Aliases the C buffer with no copy at all. The returned slice is only valid
-// until the buffer is handed back with stream.PushBuffer.
+// until the buffer is handed back with stream.PushBuffer or released with
+// buffer.Close().
 dataSlice, err := buffer.GetDataSlice()
 
 // Copies into a caller-owned slice, allocating nothing. The copy survives
@@ -558,7 +565,10 @@ for i := 0; i < bufferCount; i++ {
     if err != nil {
         return err
     }
-    stream.PushBuffer(buffer)
+    if err := stream.PushBuffer(buffer); err != nil {
+        buffer.Close()
+        return err
+    }
 }
 ```
 
@@ -714,10 +724,22 @@ map. Run `go doc github.com/MeKo-Christian/go-aravis` for the full surface.
 **Stream Management**:
 
 - `CreateStream()` - Create image data stream, using `Camera.ThreadPriority`
-- `PushBuffer(buffer)` - Return a buffer to the acquisition queue
-- `PopBuffer()` - Blocks indefinitely until a frame is available
-- `TimeoutPopBuffer(timeout)` - Blocks until a frame arrives or the timeout expires
-- `TryPopBuffer()` - The non-blocking variant; returns immediately if no frame is ready
+- `PushBuffer(buffer) error` - Hand a buffer to the acquisition queue, transferring
+  ownership to the stream. Rejects a buffer the caller no longer owns
+  (`ErrBufferNotOwned`), a nil buffer and a nil or closed stream.
+- `PopBuffer()` - Blocks indefinitely until a frame is available; `ErrNoBuffer` if the
+  stream itself is rejected
+- `TimeoutPopBuffer(timeout)` - Blocks until a frame arrives or the timeout expires,
+  which is reported as `ErrTimeout`
+- `TryPopBuffer()` - The non-blocking variant; an empty queue is a nil buffer with a
+  **nil error**
+
+**Buffer Ownership**:
+
+- `NewBuffer(size)` - Allocate a buffer the caller owns
+- `Close() / IsClosed()` - Release a buffer the caller owns; idempotent across copies.
+  A buffer is released either by pushing it to a stream or by closing it — exactly one
+  of the two.
 
 **Advanced Features**:
 

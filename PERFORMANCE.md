@@ -83,8 +83,9 @@ if err != nil {
 }
 
 // WARNING: dataSlice aliases memory owned by Aravis. It is invalidated as soon as
-// the buffer goes back to the stream via stream.PushBuffer — process the data
-// before that call, or copy what you need to keep.
+// the buffer goes back to the stream via stream.PushBuffer, and just as surely by
+// buffer.Close(), which frees the payload there and then — process the data before
+// either call, or copy what you need to keep.
 ```
 
 #### 2. Pre-allocated Buffer Copy (Fast and safe)
@@ -101,13 +102,9 @@ dataBuffer := make([]byte, payloadSize)
 // In streaming loop - no allocations
 for {
     buffer, err := stream.TimeoutPopBuffer(timeout)
-    // Push back whatever we got: a popped buffer is ours, and a non-nil buffer
-    // can arrive together with a non-nil error.
-    if buffer.IsNil() {
-        continue
-    }
     if err != nil {
-        stream.PushBuffer(buffer)
+        // errors.Is(err, aravis.ErrTimeout) is a dropped frame; anything else
+        // is a real failure.
         continue
     }
 
@@ -117,7 +114,10 @@ for {
         process(dataBuffer[:bytesRead])
     }
 
-    stream.PushBuffer(buffer)
+    // A popped buffer is ours: push it back, or it leaks.
+    if err := stream.PushBuffer(buffer); err != nil {
+        return err
+    }
 }
 ```
 
@@ -217,7 +217,10 @@ func stream(deviceId string, timeout time.Duration, process func([]byte)) error 
         if err != nil {
             return err
         }
-        stream.PushBuffer(buffer)
+        if err := stream.PushBuffer(buffer); err != nil {
+            buffer.Close()
+            return err
+        }
     }
 
     // Pre-allocate the destination once, reuse it every frame
@@ -230,33 +233,35 @@ func stream(deviceId string, timeout time.Duration, process func([]byte)) error 
 
     for {
         buffer, err := stream.TimeoutPopBuffer(timeout)
-
-        // A popped buffer belongs to us, and the pop can hand back a valid buffer
-        // together with a non-nil error. Branch on IsNil, not on err, or the queue
-        // drains one buffer per error until acquisition stalls for good.
-        if buffer.IsNil() {
-            continue // Nothing to recycle
+        if errors.Is(err, aravis.ErrTimeout) {
+            continue // Dropped frame; nothing to recycle
+        }
+        if err != nil {
+            return err
         }
 
-        if err == nil {
-            if status, serr := buffer.GetStatus(); serr == nil && status == aravis.BUFFER_STATUS_SUCCESS {
-                // Option 1 — zero-copy. Fastest, but the slice is invalidated by
-                // the PushBuffer below, so process must not retain it.
-                //
-                //  if dataSlice, derr := buffer.GetDataSlice(); derr == nil {
-                //      process(dataSlice)
-                //  }
+        if status, serr := buffer.GetStatus(); serr == nil && status == aravis.BUFFER_STATUS_SUCCESS {
+            // Option 1 — zero-copy. Fastest, but the slice is invalidated by
+            // the PushBuffer below, so process must not retain it.
+            //
+            //  if dataSlice, derr := buffer.GetDataSlice(); derr == nil {
+            //      process(dataSlice)
+            //  }
 
-                // Option 2 — pre-allocated copy. Survives PushBuffer, but every
-                // iteration overwrites dataBuffer, so process must copy anything
-                // it keeps beyond the current frame.
-                if bytesRead, derr := buffer.GetDataInto(dataBuffer); derr == nil {
-                    process(dataBuffer[:bytesRead])
-                }
+            // Option 2 — pre-allocated copy. Survives PushBuffer, but every
+            // iteration overwrites dataBuffer, so process must copy anything
+            // it keeps beyond the current frame.
+            if bytesRead, derr := buffer.GetDataInto(dataBuffer); derr == nil {
+                process(dataBuffer[:bytesRead])
             }
         }
 
-        stream.PushBuffer(buffer)
+        // A popped buffer belongs to us. Push it back to recycle it — or call
+        // buffer.Close() to release it, which is what to do when the loop stops
+        // holding on to a frame it has popped.
+        if err := stream.PushBuffer(buffer); err != nil {
+            return err
+        }
     }
 }
 ```
@@ -274,7 +279,7 @@ func stream(deviceId string, timeout time.Duration, process func([]byte)) error 
 ### DON'T:
 
 - Call `GetData()` in tight loops (allocates every time)
-- Keep references to `GetDataSlice()` results after returning buffers
+- Keep references to `GetDataSlice()` results after returning or closing buffers
 - Use regular methods for high-frequency parameter access
 - Allocate new buffers in streaming loops
 

@@ -84,8 +84,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Add buffer to stream
-	stream.PushBuffer(buffer)
+	// Add buffer to stream. The stream owns it from here on.
+	if err := stream.PushBuffer(buffer); err != nil {
+		buffer.Close()
+		log.Fatal(err)
+	}
 
 	// Start acquisition
 	err = camera.StartAcquisition()
@@ -101,6 +104,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// The pop hands ownership of the buffer back to us, and Stream.Close frees
+	// only what is still in the stream's queues. This is a one-shot, so the
+	// frame is released rather than recycled; an acquisition loop would push it
+	// back with stream.PushBuffer instead.
+	defer buffer.Close()
 
 	// Check buffer status
 	status, err := buffer.GetStatus()

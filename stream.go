@@ -64,8 +64,7 @@ func (s *Stream) check() error {
 // PushBuffer hands a buffer to the stream's input queue so it can be filled
 // with the next frame, wrapping arv_stream_push_buffer. The stream takes
 // ownership of the buffer and releases it, along with every other buffer still
-// in its queues, when the stream is closed. This is the only way to give a
-// buffer back: a buffer the caller holds is never freed by Stream.Close.
+// in its queues, when the stream is closed.
 //
 // Push both freshly allocated buffers (from NewBuffer) and buffers you have
 // finished reading after a pop. From the moment of the push the payload memory
@@ -73,8 +72,33 @@ func (s *Stream) check() error {
 // time, so any slice or pointer obtained from Buffer.GetDataSlice or
 // Buffer.GetDataUnsafe for that buffer must not be used past this call — copy
 // the data out first if you still need it.
-func (s *Stream) PushBuffer(b Buffer) {
+//
+// The push gives up the caller's ownership of the buffer, which makes b and
+// every copy of it inert. Pushing the same buffer twice, or pushing one that
+// Buffer.Close has already released, returns ErrBufferNotOwned rather than
+// handing Aravis a buffer it owns already — which is a double free. A buffer
+// holding no ArvBuffer returns ErrNilBuffer, and a nil or closed stream
+// ErrNilStream or ErrStreamClosed; the first two used to trip a GLib assertion
+// inside Aravis instead.
+func (s *Stream) PushBuffer(b Buffer) error {
+	if err := s.check(); err != nil {
+		return err
+	}
+
+	if b.buffer == nil {
+		return ErrNilBuffer
+	}
+
+	// claim succeeds once per underlying ArvBuffer, so the ownership handed to
+	// the stream is taken away from every Go value referring to that buffer,
+	// not just from this copy.
+	if !b.owned.claim() {
+		return ErrBufferNotOwned
+	}
+
 	C.arv_stream_push_buffer(s.stream, b.buffer)
+
+	return nil
 }
 
 // PopBuffer takes the next filled buffer from the stream's output queue,
@@ -85,9 +109,10 @@ func (s *Stream) PushBuffer(b Buffer) {
 // TimeoutPopBuffer when you need a deadline, or TryPopBuffer to poll.
 //
 // Aravis transfers ownership of the returned buffer to the caller, so it is
-// yours until you hand it back: check Buffer.GetStatus, read the data, then
-// return it with PushBuffer. Stream.Close frees only the buffers still in the
-// stream's queues, so a popped buffer that is never pushed back leaks.
+// yours until you give it up: check Buffer.GetStatus, read the data, then
+// either return it with PushBuffer or release it with Buffer.Close.
+// Stream.Close frees only the buffers still in the stream's queues, so a popped
+// buffer that is neither pushed back nor closed leaks.
 //
 // Because the call waits for a buffer, an empty result can only mean Aravis
 // rejected the stream; it is reported as ErrNoBuffer. A nil or closed stream
@@ -102,7 +127,7 @@ func (s *Stream) PopBuffer() (Buffer, error) {
 		return Buffer{}, ErrNoBuffer
 	}
 
-	return Buffer{buffer: buffer}, nil
+	return ownedBuffer(buffer), nil
 }
 
 // TryPopBuffer takes the next filled buffer from the stream's output queue if
@@ -116,7 +141,8 @@ func (s *Stream) PopBuffer() (Buffer, error) {
 // ErrStreamClosed.
 //
 // As with PopBuffer, ownership of a non-nil buffer passes to the caller, which
-// must return it with PushBuffer after use, or it leaks.
+// must return it with PushBuffer or release it with Buffer.Close after use, or
+// it leaks.
 func (s *Stream) TryPopBuffer() (Buffer, error) {
 	if err := s.check(); err != nil {
 		return Buffer{}, err
@@ -127,7 +153,7 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 		return Buffer{}, nil
 	}
 
-	return Buffer{buffer: buffer}, nil
+	return ownedBuffer(buffer), nil
 }
 
 // TimeoutPopBuffer takes the next filled buffer from the stream's output
@@ -152,8 +178,9 @@ func (s *Stream) TryPopBuffer() (Buffer, error) {
 // still waits rather than returning at once.
 //
 // On success Aravis transfers ownership of the buffer to the caller, which
-// must return it with PushBuffer once its status has been checked and its data
-// read — Stream.Close will not free a buffer that is still popped.
+// must return it with PushBuffer, or release it with Buffer.Close, once its
+// status has been checked and its data read — Stream.Close will not free a
+// buffer that is still popped.
 func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 	if err := s.check(); err != nil {
 		return Buffer{}, err
@@ -174,7 +201,7 @@ func (s *Stream) TimeoutPopBuffer(t time.Duration) (Buffer, error) {
 		return Buffer{}, ErrTimeout
 	}
 
-	return Buffer{buffer: buffer}, nil
+	return ownedBuffer(buffer), nil
 }
 
 // Close releases the underlying stream. It is safe to call Close more than
