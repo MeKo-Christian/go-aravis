@@ -69,3 +69,59 @@ func TestBayerEdgePhasePreserved(t *testing.T) {
 		t.Errorf("At(2,0) = %+v, want %+v (green must reflect to column 1, not clamp to the red site)", c, want)
 	}
 }
+
+// makeBayerAt builds a w x h BayerRG with the given origin, filled with the
+// same raw samples as makeBayer(w, h), so the two must debayer identically.
+func makeBayerAt(originX, originY, w, h int) *aravis.BayerRG {
+	img := aravis.NewBayerRG(image.Rect(originX, originY, originX+w, originY+h))
+	for i := range img.Pix {
+		img.Pix[i] = uint8(i)
+	}
+
+	return img
+}
+
+// TestBayerOddOriginPhase pins the CFA phase to the rectangle's origin rather
+// than to absolute coordinates. sample indexes Pix relative to Rect.Min, so a
+// rect with an odd Min.X/Min.Y must still read its top-left sample as red.
+// Deriving the phase from x&1/y&1 instead swapped red and blue and pulled the
+// green samples from the wrong neighbors for every such image.
+func TestBayerOddOriginPhase(t *testing.T) {
+	const w, h = 4, 4
+
+	origins := [][2]int{{1, 1}, {1, 0}, {0, 1}, {3, 5}, {-1, -1}}
+
+	base := makeBayer(w, h)
+
+	for _, o := range origins {
+		img := makeBayerAt(o[0], o[1], w, h)
+
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				got := img.At(o[0]+x, o[1]+y)
+				want := base.At(x, y)
+
+				if got != want {
+					t.Errorf("origin (%d,%d): At(%d,%d) = %+v, want %+v (same raw samples as the zero-origin image)",
+						o[0], o[1], o[0]+x, o[1]+y, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestBayerOddOriginTopLeftIsRed states the same invariant directly: the first
+// sample of an odd-origin image is a red site, so R comes from it, G from the
+// sample to its right and B from the diagonal neighbor.
+func TestBayerOddOriginTopLeftIsRed(t *testing.T) {
+	img := makeBayerAt(1, 1, 4, 4) // Pix[i] = i, Stride = 4
+
+	c, ok := img.At(1, 1).(color.RGBA)
+	if !ok {
+		t.Fatalf("At did not return color.RGBA")
+	}
+
+	if want := (color.RGBA{R: 0, G: 1, B: 5, A: 0xff}); c != want {
+		t.Errorf("At(1,1) = %+v, want %+v (Rect.Min is the red site regardless of its parity)", c, want)
+	}
+}
