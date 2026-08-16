@@ -102,10 +102,11 @@ dataBuffer := make([]byte, payloadSize)
 // In streaming loop - no allocations
 for {
     buffer, err := stream.TimeoutPopBuffer(timeout)
+    if errors.Is(err, aravis.ErrTimeout) {
+        continue // a dropped frame; keep waiting for the next one
+    }
     if err != nil {
-        // errors.Is(err, aravis.ErrTimeout) is a dropped frame; anything else
-        // is a real failure.
-        continue
+        return err // a closed or nil stream, or a bad timeout: a real failure
     }
 
     // Copy into pre-allocated buffer
