@@ -15,11 +15,41 @@ void arv_set_node_feature_value(ArvDevice *device, char *name, char *value, GErr
 	arv_gc_feature_node_set_value_from_string (ARV_GC_FEATURE_NODE (feature), value, error);
 }
 
+// arv_gv_device_check guards the two GigE-only control calls below. Both cast
+// through ARV_GV_DEVICE(), and cgo compiles this file with -O2, which makes
+// GLib compile its cast checks out (gtype.h keys them off __OPTIMIZE__): the
+// cast is then a plain pointer cast, so a non-GigE device does not even get a
+// CRITICAL — arv_gv_device_take_control dereferences the wrong struct and the
+// process segfaults.
+//
+// The failure is reported as ARV_DEVICE_ERROR_WRONG_FEATURE because that code
+// is not in the errorMessages table in internal.go, so the message written
+// here reaches the caller verbatim. ARV_DEVICE_ERROR_NOT_FOUND would be
+// rewritten to "device not found", which is untrue: the device was found, it
+// is simply of the wrong type.
+static gboolean arv_gv_device_check(ArvDevice *device, GError **error) {
+	if (device == NULL) {
+		g_set_error (error, ARV_DEVICE_ERROR, ARV_DEVICE_ERROR_INVALID_PARAMETER,
+			"device is NULL");
+		return FALSE;
+	}
+	if (!ARV_IS_GV_DEVICE (device)) {
+		g_set_error (error, ARV_DEVICE_ERROR, ARV_DEVICE_ERROR_WRONG_FEATURE,
+			"device is not a GigE Vision device");
+		return FALSE;
+	}
+	return TRUE;
+}
+
 gboolean arv_device_take_control(ArvDevice *device, GError **error) {
+	if (!arv_gv_device_check (device, error))
+		return FALSE;
 	return arv_gv_device_take_control(ARV_GV_DEVICE(device), error);
 }
 
 gboolean arv_device_leave_control(ArvDevice *device, GError **error) {
+	if (!arv_gv_device_check (device, error))
+		return FALSE;
 	return arv_gv_device_leave_control(ARV_GV_DEVICE(device), error);
 }
 
@@ -156,13 +186,34 @@ func (d *Device) IsClosed() bool {
 	return d.device == nil || d.owned.isClosed()
 }
 
+// check reports whether this Device may be handed to Aravis. Every method that
+// dereferences the underlying pointer calls it first: Aravis asserts on a NULL
+// ArvDevice, which at best logs a GLib CRITICAL and at worst — for the
+// GigE-only control calls, whose cast check the compiler optimises away —
+// crashes the process.
+func (d *Device) check() error {
+	if d == nil || d.device == nil {
+		return errors.New("device is nil")
+	}
+
+	return nil
+}
+
 // TakeControl requests exclusive control access to a GigE Vision device and
 // reports whether control was granted. Only the controlling application may
-// change device settings. The device must be a GigE Vision device; calling
-// this on any other device type is a programming error.
+// change device settings.
+//
+// The device must be a GigE Vision device. On any other device type the call
+// fails with an [AravisError] carrying [DEVICE_ERROR_WRONG_FEATURE] instead of
+// performing an unchecked cast; use [Camera.IsGVDevice] to tell the two apart
+// ahead of time.
 func (d *Device) TakeControl() (bool, error) {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return false, err
+	}
 
 	cbool := C.arv_device_take_control(d.device, &gerror)
 
@@ -175,10 +226,17 @@ func (d *Device) TakeControl() (bool, error) {
 
 // LeaveControl releases exclusive control access to a GigE Vision device that
 // was acquired with [Device.TakeControl] and reports whether the release
-// succeeded. The device must be a GigE Vision device.
+// succeeded.
+//
+// As with [Device.TakeControl], a device that is not a GigE Vision device
+// fails with an [AravisError] carrying [DEVICE_ERROR_WRONG_FEATURE].
 func (d *Device) LeaveControl() (bool, error) {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return false, err
+	}
 
 	cbool := C.arv_device_leave_control(d.device, &gerror)
 
@@ -195,6 +253,10 @@ func (d *Device) LeaveControl() (bool, error) {
 func (d *Device) SetStringFeatureValue(feature, value string) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	cfeature := C.CString(feature)
 	cvalue := C.CString(value)
@@ -217,6 +279,10 @@ func (d *Device) SetStringFeatureValue(feature, value string) error {
 // around the call. A missing feature, a wrong feature type, or a failed read
 // therefore yields the empty string and a nil error rather than an error.
 func (d *Device) GetStringFeatureValue(feature string) (string, error) {
+	if err := d.check(); err != nil {
+		return "", err
+	}
+
 	cfeature := C.CString(feature)
 	cvalue, err := C.arv_device_get_string_feature_value(d.device, cfeature, nil)
 	C.free(unsafe.Pointer(cfeature))
@@ -229,6 +295,10 @@ func (d *Device) GetStringFeatureValue(feature string) (string, error) {
 func (d *Device) SetIntegerFeatureValue(feature string, value int64) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	cfeature := C.CString(feature)
 	cvalue := C.long(value)
@@ -250,6 +320,10 @@ func (d *Device) SetIntegerFeatureValue(feature string, value int64) error {
 // around the call. A missing feature, a wrong feature type, or a failed read
 // therefore yields 0 and a nil error rather than an error.
 func (d *Device) GetIntegerFeatureValue(feature string) (int64, error) {
+	if err := d.check(); err != nil {
+		return 0, err
+	}
+
 	cfeature := C.CString(feature)
 	cvalue, err := C.arv_device_get_integer_feature_value(d.device, cfeature, nil)
 	C.free(unsafe.Pointer(cfeature))
@@ -262,6 +336,10 @@ func (d *Device) GetIntegerFeatureValue(feature string) (int64, error) {
 func (d *Device) SetFloatFeatureValue(feature string, value float64) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	cfeature := C.CString(feature)
 	cvalue := C.double(value)
@@ -283,6 +361,10 @@ func (d *Device) SetFloatFeatureValue(feature string, value float64) error {
 // around the call. A missing feature, a wrong feature type, or a failed read
 // therefore yields 0 and a nil error rather than an error.
 func (d *Device) GetFloatFeatureValue(feature string) (float64, error) {
+	if err := d.check(); err != nil {
+		return 0, err
+	}
+
 	cfeature := C.CString(feature)
 	cvalue, err := C.arv_device_get_float_feature_value(d.device, cfeature, nil)
 	C.free(unsafe.Pointer(cfeature))
@@ -296,6 +378,10 @@ func (d *Device) GetFloatFeatureValue(feature string) (float64, error) {
 func (d *Device) SetNodeFeatureValue(feature, value string) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	cfeature := C.CString(feature)
 	cvalue := C.CString(value)
@@ -316,6 +402,11 @@ func (d *Device) SetNodeFeatureValue(feature, value string) error {
 func (d *Device) ExecuteCommand(feature string) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
+
 	cfeature := C.CString(feature)
 
 	C.arv_device_execute_command(d.device, cfeature, &gerror)
@@ -336,9 +427,11 @@ func (d *Device) IsNil() bool {
 // ReadMemory reads size bytes from the device memory starting at address and
 // returns them.
 //
-// size must be greater than zero. The implementation indexes the destination
-// slice without checking, so ReadMemory(address, 0) panics rather than
-// returning an empty slice.
+// size must be greater than zero: a zero-size read returns an error, the way
+// [Device.WriteMemory] rejects an empty write. Returning an empty slice was the
+// alternative, but a zero-size transfer is a caller mistake rather than a
+// meaningful request, and the two memory calls are easier to use when they
+// agree on that.
 //
 // This is low-level access intended for advanced users. Prefer GenICam feature
 // access whenever the information is available as a feature; the register map
@@ -347,6 +440,14 @@ func (d *Device) IsNil() bool {
 func (d *Device) ReadMemory(address uint64, size uint32) ([]byte, error) {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return nil, err
+	}
+
+	if size == 0 {
+		return nil, errors.New("no data to read")
+	}
 
 	buffer := make([]byte, size)
 
@@ -380,6 +481,10 @@ func (d *Device) ReadMemory(address uint64, size uint32) ([]byte, error) {
 func (d *Device) WriteMemory(address uint64, data []byte) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	if len(data) == 0 {
 		return errors.New("no data to write")
@@ -416,6 +521,10 @@ func (d *Device) ReadRegister(address uint64) (uint32, error) {
 	var err error
 	var value uint32
 
+	if err := d.check(); err != nil {
+		return 0, err
+	}
+
 	success := C.arv_device_read_register(
 		d.device,
 		C.guint64(address),
@@ -444,6 +553,10 @@ func (d *Device) ReadRegister(address uint64) (uint32, error) {
 func (d *Device) WriteRegister(address uint64, value uint32) error {
 	var gerror *C.GError
 	var err error
+
+	if err := d.check(); err != nil {
+		return err
+	}
 
 	success := C.arv_device_write_register(
 		d.device,
