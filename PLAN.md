@@ -409,10 +409,19 @@ behavior is wrong. Ordered by severity.
       A package-level sentinel would fix it. Separately, a negative `time.Duration`
       converts to a huge unsigned value, turning a nonsensical timeout into an
       effectively infinite block.
-- [ ] **`BayerRG.At` uses the wrong CFA phase for an odd-origin rect.** `At` derives the
+- [x] **`BayerRG.At` uses the wrong CFA phase for an odd-origin rect.** `At` derived the
       phase from absolute `x&1`/`y&1` while `sample` indexes relative to `Rect.Min`, so
-      for any rect with an odd `Min.X`/`Min.Y` every color is off by one Bayer site.
-      `At` should use `(x-Rect.Min.X)&1` / `(y-Rect.Min.Y)&1`.
+      for any rect with an odd `Min.X`/`Min.Y` every color was off by one Bayer site —
+      red and blue swapped and the green samples came from the wrong neighbors.
+      **Resolved:** `At` now derives the phase from `(x-Rect.Min.X)&1` /
+      `(y-Rect.Min.Y)&1`, and the type's doc comment no longer carries the caveat.
+      `reflectCoord`'s mirrors preserve the parity of the coordinate *relative to
+      `Rect.Min`* (both map that difference by a sign flip or an even offset), which is
+      the same quantity `At` now keys on, so edge reflection still lands on the right
+      color phase. The bug was invisible because every test built
+      `image.Rect(0, 0, w, h)`, where absolute and relative coordinates coincide;
+      `tests/bayer_test.go` now also debayers odd-origin rects and requires the same
+      colors as the equivalent zero-origin image.
 - [ ] **A `Buffer` in the caller's hands cannot be freed.** `Buffer` has no `Close`, and
       `Stream.Close` releases only the buffers still sitting in the stream's queues.
       Aravis gives ownership of a popped buffer to the caller
@@ -422,10 +431,13 @@ behavior is wrong. Ordered by severity.
       out the P3 docs had this backwards — they claimed a popped buffer stayed
       stream-owned. The docs are corrected; the API gap stands.
 - [ ] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
-      against `GetNumParts`; `SetGainAuto` has no `GetGainAuto` counterpart although
-      `arv_camera_get_gain_auto` exists; `GetFrameRateBounds`/`GetGainBounds` cast
-      `*float64` to `*C.double` through `unsafe.Pointer` where `GetExposureTimeBounds`
-      correctly declares `C.double` locals.
+      against `GetNumParts`. Still open; the other two items of this bullet are done.
+      **Resolved:** `SetGainAuto` now has a `GetGainAuto` counterpart wrapping
+      `arv_camera_get_gain_auto`, and `GetFrameRateBounds`/`GetGainBounds` declare
+      `C.double` out-parameters instead of reinterpreting `*float64` through
+      `unsafe.Pointer`, matching `GetExposureTimeBounds`. All three bounds accessors and
+      the `GainAuto` round trip are covered against the Fake camera, which had no tests
+      at all before.
 
 ### Suggested execution order
 
