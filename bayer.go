@@ -6,8 +6,9 @@ import (
 )
 
 // BayerRG is an image.Image view over a raw, single-plane Bayer frame in RGGB
-// order: the sample at an even column and even row is red, the two mixed-parity
-// sites are green, and the odd/odd site is blue. Pix holds one 8-bit sensor
+// order: counting from Rect.Min, the sample at an even column and even row is
+// red, the two mixed-parity sites are green, and the odd/odd site is blue. Pix
+// holds one 8-bit sensor
 // sample per pixel; the RGBA values handed out by At are reconstructed on the
 // fly by simple nearest-neighbor debayering, so no separate RGB copy is kept.
 //
@@ -15,11 +16,8 @@ import (
 // required color, and neighbors that fall outside Rect are mirrored back across
 // the edge rather than clamped, which keeps them on the correct CFA phase.
 //
-// Caveat: At derives the CFA phase from the absolute coordinates (x&1, y&1)
-// while sample indexes Pix relative to Rect.Min. The two therefore agree only
-// when Rect.Min.X and Rect.Min.Y are both even; for a rect with an odd origin
-// the documented RGGB phase does not hold and the reconstructed colors are
-// shifted by one site.
+// The CFA phase is anchored to Rect.Min, matching how Pix is indexed: the
+// sample at Rect.Min is always red, whatever the parity of the origin.
 type BayerRG struct {
 	// Pix holds the image's pixels, in bayer order. The pixel at
 	// (x, y) starts at Pix[(y-Rect.Min.Y)*Stride + (x-Rect.Min.X)].
@@ -34,9 +32,8 @@ type BayerRG struct {
 // r.Dx()*r.Dy() bytes, one byte per sensor sample, with Stride set to r.Dx().
 // Callers typically overwrite Pix with the raw frame data from the camera.
 //
-// Because At interprets the CFA phase from absolute coordinates, pass a
-// rectangle whose origin is even (for example image.Rect(0, 0, w, h)) if the
-// data is to be read as RGGB.
+// Any origin works: the CFA phase is taken relative to r.Min, so the first
+// sample of Pix is read as red regardless of whether r.Min is even or odd.
 func NewBayerRG(r image.Rectangle) *BayerRG {
 	w, h := r.Dx(), r.Dy()
 	pix := make([]uint8, w*h)
@@ -72,9 +69,12 @@ func (p *BayerRG) sample(x, y int) uint8 {
 }
 
 // reflectCoord maps v into the half-open range [lo, hi) by mirroring across the
-// edges. Because each reflection reverses a unit step, the parity of the result
-// relative to the edge is preserved, which keeps a Bayer neighbor on its color
-// phase. A degenerate span (<= 1) has no valid mirror, so it returns lo.
+// edges. Both mirrors preserve the parity of v-lo: reflecting at the low edge
+// maps v-lo to -(v-lo), and reflecting at the high edge maps it to
+// 2*(hi-1-lo)-(v-lo), and both leave the low bit unchanged. Since At derives
+// the CFA phase from the same difference against Rect.Min, a reflected neighbor
+// stays on its Bayer color phase. A degenerate span (<= 1) has no valid mirror,
+// so it returns lo.
 func reflectCoord(v, lo, hi int) int {
 	if hi-lo <= 1 {
 		return lo
@@ -92,8 +92,14 @@ func reflectCoord(v, lo, hi int) int {
 }
 
 // At returns an RGBA pixel with simple nearest-neighbor debayering.
+//
+// The Bayer site is determined by the position relative to Rect.Min, matching
+// how sample indexes Pix, so the phase holds for any rectangle origin.
 func (p *BayerRG) At(x, y int) color.Color {
-	if x&1 == 0 && y&1 == 0 {
+	dx := (x - p.Rect.Min.X) & 1
+	dy := (y - p.Rect.Min.Y) & 1
+
+	if dx == 0 && dy == 0 {
 		// top-left: red
 		return color.RGBA{
 			p.sample(x, y),
@@ -101,7 +107,7 @@ func (p *BayerRG) At(x, y int) color.Color {
 			p.sample(x+1, y+1),
 			0xff,
 		}
-	} else if x&1 == 1 && y&1 == 0 {
+	} else if dx == 1 && dy == 0 {
 		// top-right: green
 		return color.RGBA{
 			p.sample(x-1, y),
@@ -109,7 +115,7 @@ func (p *BayerRG) At(x, y int) color.Color {
 			p.sample(x, y+1),
 			0xff,
 		}
-	} else if x&1 == 0 && y&1 == 1 {
+	} else if dx == 0 && dy == 1 {
 		// bottom-left: green
 		return color.RGBA{
 			p.sample(x, y-1),
