@@ -12,7 +12,9 @@ calls go through the same C layer a physical camera would, which is what makes
 it useful for a binding whose bugs live in that layer — pointer widths,
 `GError` versus `errno`, ownership and unref counts, NULL sentinels. The
 `GError`-versus-`errno` class is not just a worry: `errno_test.go` requires
-every accessor whose C function cannot fail to report success, and
+every accessor that still returns an error whose C call cannot fail to report
+success — eleven others have since dropped the error return altogether, which
+the compiler enforces at every call site — and
 `internal/cerrno` reduces the defect itself to one C function that fails a
 syscall internally and succeeds anyway — called through cgo's two-result form it
 reports `ENOENT` for that success.
@@ -73,7 +75,7 @@ in isolation.
 | `fake_test.go` | `TestMain`, `requireFakeCamera`, `requireStreamingCamera`, `seededBuffer` — the backend every other file builds on |
 | `interface_test.go` | device and interface discovery, enable/disable, out-of-range ids |
 | `camera_test.go` | camera identity, geometry, parameter round-trips, `*Fast` accessors, stream creation |
-| `buffer_test.go` | the fresh-buffer contract and the filled-buffer accessors, including multipart |
+| `buffer_test.go` | the fresh-buffer contract, the zero-`Buffer` contract of the errorless accessors, and the filled-buffer accessors, including multipart |
 | `buffer_data_test.go` | `GetDataInto` clamping, overrun, empty dest, and its zero-allocation guarantee |
 | `stream_pop_test.go` | the three pops: the timeout sentinel, the negative and sub-microsecond timeout, the empty poll, the nil and closed stream, and a positive control under acquisition |
 | `buffer_close_test.go` | `Buffer.Close` across copies and on the zero value, the ownership hand-off through `PushBuffer`, and the arguments `PushBuffer` now rejects |
@@ -85,7 +87,7 @@ in isolation.
 | `performance_test.go` | benchmarks |
 | `bayer_test.go` | the debayering edge cases (pure Go, no backend needed) |
 | `device_feature_test.go` | the generic `Device` feature getters: missing feature, wrong type, happy path, `*Fast` parity |
-| `errno_test.go` | the accessors whose C call has no `GError` must return a nil error |
+| `errno_test.go` | the accessors that keep an error return whose C call cannot fail must report nil |
 | `fast_guard_test.go` | the twelve `*Fast` methods reject a nil and a closed receiver, and still work on an open one |
 
 Pure-Go units — the error mapping, `toBool`, `closeFlag`, the C-string cache —
