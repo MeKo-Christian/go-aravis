@@ -68,7 +68,7 @@ Standard `GetData()` copies the entire frame buffer:
 
 ```go
 // Inefficient - copies entire frame buffer
-data, err := buffer.GetData() // Allocates new []byte every time
+data := buffer.GetData() // Allocates new []byte every time
 ```
 
 ### Solutions
@@ -77,10 +77,7 @@ data, err := buffer.GetData() // Allocates new []byte every time
 
 ```go
 // Efficient - direct access to C memory
-dataSlice, err := buffer.GetDataSlice()
-if err != nil {
-    return err
-}
+dataSlice := buffer.GetDataSlice()
 
 // WARNING: dataSlice aliases memory owned by Aravis. It is invalidated as soon as
 // the buffer goes back to the stream via stream.PushBuffer, and just as surely by
@@ -110,10 +107,7 @@ for {
     }
 
     // Copy into pre-allocated buffer
-    bytesRead, err := buffer.GetDataInto(dataBuffer)
-    if err == nil {
-        process(dataBuffer[:bytesRead])
-    }
+    process(dataBuffer[:buffer.GetDataInto(dataBuffer)])
 
     // A popped buffer is ours: push it back, or it leaks.
     if err := stream.PushBuffer(buffer); err != nil {
@@ -126,10 +120,7 @@ for {
 
 ```go
 // Direct pointer access for C interop
-ptr, size, err := buffer.GetDataUnsafe()
-if err != nil {
-    return err
-}
+ptr, size := buffer.GetDataUnsafe()
 // Use unsafe.Pointer for direct memory access
 ```
 
@@ -241,20 +232,16 @@ func stream(deviceId string, timeout time.Duration, process func([]byte)) error 
             return err
         }
 
-        if status, serr := buffer.GetStatus(); serr == nil && status == aravis.BUFFER_STATUS_SUCCESS {
+        if buffer.GetStatus() == aravis.BUFFER_STATUS_SUCCESS {
             // Option 1 — zero-copy. Fastest, but the slice is invalidated by
             // the PushBuffer below, so process must not retain it.
             //
-            //  if dataSlice, derr := buffer.GetDataSlice(); derr == nil {
-            //      process(dataSlice)
-            //  }
+            //  process(buffer.GetDataSlice())
 
             // Option 2 — pre-allocated copy. Survives PushBuffer, but every
             // iteration overwrites dataBuffer, so process must copy anything
             // it keeps beyond the current frame.
-            if bytesRead, derr := buffer.GetDataInto(dataBuffer); derr == nil {
-                process(dataBuffer[:bytesRead])
-            }
+            process(dataBuffer[:buffer.GetDataInto(dataBuffer)])
         }
 
         // A popped buffer belongs to us. Push it back to recycle it — or call

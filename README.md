@@ -99,7 +99,6 @@ package main
 
 import (
     "fmt"
-    "log"
 
     aravis "github.com/MeKo-Christian/go-aravis"
 )
@@ -109,21 +108,13 @@ func main() {
     aravis.UpdateDeviceList()
 
     // Get device count
-    n, err := aravis.GetNumDevices()
-    if err != nil {
-        log.Fatal(err)
-    }
+    n := aravis.GetNumDevices()
 
     fmt.Printf("Found %d camera(s)\n", n)
 
     // List all devices
     for i := uint(0); i < n; i++ {
-        deviceId, err := aravis.GetDeviceId(i)
-        if err != nil {
-            log.Printf("Error getting device %d: %v", i, err)
-            continue
-        }
-        fmt.Printf("Device %d: %s\n", i, deviceId)
+        fmt.Printf("Device %d: %s\n", i, aravis.GetDeviceId(i))
     }
 }
 ```
@@ -145,13 +136,12 @@ import (
 func main() {
     // Initialize camera system
     aravis.UpdateDeviceList()
-    n, err := aravis.GetNumDevices()
-    if err != nil || n == 0 {
+    if aravis.GetNumDevices() == 0 {
         log.Fatal("No cameras found")
     }
 
     // Connect to first camera
-    deviceId, _ := aravis.GetDeviceId(0)
+    deviceId := aravis.GetDeviceId(0)
     camera, err := aravis.NewCamera(deviceId)
     if err != nil {
         log.Fatal(err)
@@ -212,9 +202,8 @@ func main() {
         }
 
         // Check frame quality
-        status, _ := buffer.GetStatus()
-        if status == aravis.BUFFER_STATUS_SUCCESS {
-            data, _ := buffer.GetData()
+        if buffer.GetStatus() == aravis.BUFFER_STATUS_SUCCESS {
+            data := buffer.GetData()
             fmt.Printf("Frame %d: %d bytes\n", frameCount, len(data))
             frameCount++
 
@@ -385,10 +374,7 @@ Handle advanced cameras with multiple image sensors:
 
 ```go
 // Check for multipart data
-numParts, err := buffer.GetNumParts()
-if err != nil {
-    return err
-}
+numParts := buffer.GetNumParts()
 if numParts > 1 {
     for i := 0; i < numParts; i++ {
         partData, _ := buffer.GetPartData(i)
@@ -470,18 +456,18 @@ Three ways to get at pixel data, trading safety for copies:
 
 ```go
 // Copies the frame into a freshly allocated slice
-data, err := buffer.GetData()
+data := buffer.GetData()
 
 // Aliases the C buffer with no copy at all. The returned slice is only valid
 // until the buffer is handed back with stream.PushBuffer or released with
 // buffer.Close().
-dataSlice, err := buffer.GetDataSlice()
+dataSlice := buffer.GetDataSlice()
 
 // Copies into a caller-owned slice, allocating nothing. The copy survives
 // PushBuffer, but reusing one destination means each frame overwrites the last.
 payloadSize, _ := camera.GetPayloadSize()
 dataBuffer := make([]byte, payloadSize) // Pre-allocate once, reuse every frame
-bytesRead, err := buffer.GetDataInto(dataBuffer)
+bytesRead := buffer.GetDataInto(dataBuffer)
 ```
 
 #### What is actually measured

@@ -46,6 +46,20 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   `SetFloatFeatureValue` and `SetNodeFeatureValue` previously discarded failures. The
   matching getters kept their signatures but changed behaviour — see *The generic
   `Device` feature getters swallowed every GenICam error* under **Fixed**.
+- **The accessors that cannot fail no longer return an `error`.** `Buffer.GetData`,
+  `GetDataUnsafe`, `GetDataSlice`, `GetDataInto`, `GetStatus`, `GetNumParts` and
+  `FindComponent`, together with the package-level `GetDeviceId`, `GetInterfaceId`,
+  `GetNumDevices` and `GetNumInterface` (and the deprecated `GetNumInferface`), are now
+  single-valued. None of the C functions behind them has a `GError` parameter, so the
+  error had nothing to carry and was documented as always nil — see *`errno` was being
+  reported as an error* under **Fixed**, which is where the always-nil state came from.
+  Every call site loses an `if err != nil` branch on a condition that could not occur.
+  Migrating is mechanical: drop the second result. Because removing the error also
+  removed the only way a nil receiver could have been reported, the seven `Buffer`
+  accessors — and `HasChunks`, which never returned an error — now answer from Go for a
+  `Buffer` holding no `ArvBuffer` instead of tripping `ARV_IS_BUFFER` inside Aravis. A
+  zero `Buffer` reports no data, `BUFFER_STATUS_UNKNOWN`, zero parts and a component
+  index of -1.
 
 ### Added
 
@@ -131,7 +145,9 @@ examples and CI produced the work tracked in `PLAN.md`; these are the results.
   Only a `GError` decides failure now. Sixteen accessors
   wrap C functions with no `GError` out-parameter at all — the `interface.go` id and
   count accessors, eight `Buffer` accessors and the three `Stream` pop methods — and
-  their error return is now documented as always nil. The seven `*Fast` getters no
+  their error return became always nil. It did not stay that way: the pops report real
+  sentinels and the part accessors range-check (both under **Breaking**), and the
+  remaining eleven have since dropped the error return altogether. The seven `*Fast` getters no
   longer leak `errno` on their success path. Worst case was `NewBuffer`, where
   `if err != nil || buffer == nil` both reported a failure that had not happened *and*
   dropped the successfully allocated `ArvBuffer` on the floor, leaking it; it now keys

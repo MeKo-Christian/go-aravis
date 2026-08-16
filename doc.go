@@ -14,7 +14,7 @@
 // stream owns the buffer queue:
 //
 //	aravis.UpdateDeviceList()          // populate the device list
-//	id, _ := aravis.GetDeviceId(0)     // pick a device
+//	id := aravis.GetDeviceId(0)        // pick a device
 //
 //	camera, err := aravis.NewCamera(id)
 //	if err != nil {
@@ -62,8 +62,8 @@
 //		}
 //	}()
 //
-//	if status, _ := buffer.GetStatus(); status == aravis.BUFFER_STATUS_SUCCESS {
-//		data, _ := buffer.GetData()
+//	if buffer.GetStatus() == aravis.BUFFER_STATUS_SUCCESS {
+//		data := buffer.GetData()
 //		_ = data
 //	}
 //
@@ -167,9 +167,15 @@
 // value before being returned, which is why errors.Is is the right test rather than
 // an == comparison.
 //
-// Only a GError decides that a call failed. Some accessors wrap C functions that have
-// no GError out-parameter at all, so their error return is always nil; each one says so
-// in its own documentation, and the returned value is the whole contract.
+// Only a GError decides that a call failed. An accessor wrapping a C function that has
+// no GError out-parameter therefore has nothing to report, and returns no error at all:
+// [Buffer.GetData], [Buffer.GetDataUnsafe], [Buffer.GetDataSlice], [Buffer.GetDataInto],
+// [Buffer.GetStatus], [Buffer.GetNumParts], [Buffer.FindComponent], [GetDeviceId],
+// [GetInterfaceId], [GetNumDevices] and [GetNumInterface] are single-valued, and the
+// returned value is the whole contract. Called on a receiver or index that has nothing
+// to give — the zero [Buffer], an index past the end of the device list — they report
+// emptiness rather than failure: no data, BUFFER_STATUS_UNKNOWN, zero parts, a component
+// index of -1, an empty id.
 //
 // # Concurrency
 //

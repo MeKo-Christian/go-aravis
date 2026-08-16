@@ -578,20 +578,33 @@ Ordered by severity.
       the `GainAuto` round trip are covered against the Fake camera, which had no tests
       at all before.
 
-#### Open Tasks
-
-- [ ] **Narrow the return types of the accessors that cannot fail.** The errno fix left
-      every signature intact, so a growing set of methods returns an `error` that is
-      documented as always nil: `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`,
-      `GetDataInto`, `GetStatus`, `GetNumParts`, `FindComponent`, and the four
-      package-level accessors `GetDeviceId`, `GetInterfaceId`, `GetNumDevices`,
-      `GetNumInterface`. Dropping the `error` is a breaking change at every call site, so
-      it stays deferred and should land in one deliberate sweep. The list is shorter than
-      it was: the eight part accessors and the three pops report real errors now, so they
-      have left it, and the API changes it was waiting to travel with (`Stream.PushBuffer`
-      gaining an `error`, `Buffer.Close`, the part range checks) have landed. `unparam` is
-      enabled in `.golangci.toml` and does not fire on these, so the interim state stays
-      lint-clean.
+- [x] **Narrow the return types of the accessors that cannot fail.** The errno fix left
+      every signature intact, so eleven functions returned an `error` their own
+      documentation promised was always nil. All eleven are now single-valued:
+      `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`, `GetDataInto`, `GetStatus`,
+      `GetNumParts` and `FindComponent`, plus the package-level `GetDeviceId`,
+      `GetInterfaceId`, `GetNumDevices` and `GetNumInterface` (and its deprecated
+      misspelling `GetNumInferface`). This was the deliberate sweep the item was waiting
+      for — one breaking change rather than three — and it landed after the API changes it
+      was meant to travel with (`Stream.PushBuffer` gaining an `error`, `Buffer.Close`,
+      the part range checks), so callers migrate once.
+      The removal exposed something the deferral had been hiding. The always-nil `error`
+      was the only channel through which a nil receiver could ever have been reported, and
+      none of the seven `Buffer` accessors used it: each handed the NULL to Aravis, which
+      asserts `ARV_IS_BUFFER`, logs a GLib CRITICAL and returns a zero the caller cannot
+      tell from a real value. They now answer from Go instead — as does `HasChunks`, which
+      never had an error return to begin with — so a zero `Buffer` reports no data,
+      `BUFFER_STATUS_UNKNOWN`, zero parts and a component index of -1. That is the truth
+      about a buffer holding nothing, and it is a strictly better contract than the one
+      the `error` was carrying.
+      `TestErrorlessAccessorsHandleNilBuffer` covers those eight, mirroring
+      `TestPartAccessorsRejectNilBuffer` for the accessors that do have an error to
+      return. The CRITICAL half of the claim is enforced by `make test-glib-clean`, not by
+      the assertions: verified by removing the `GetStatus` guard, which leaves the test
+      passing while the guard target reports the diagnostic.
+      `tests/errno_test.go` lost ten of its entries. What remains is exactly the set that
+      still has an error channel worth asserting; for the eleven, the compiler now enforces
+      at every call site what that test could only sample.
 
 ### Suggested execution order
 
@@ -602,8 +615,8 @@ Ordered by severity.
 5. P3 docs (describe the now-true reality) — done
 6. P5 tests (make the suite mean something) — done, except the deferred
    C-call seam
-7. P6 correctness bugs surfaced by the P3 doc pass — done, across four themed
-   PRs: the error contract, the device guards, the Bayer phase and minor camera
-   fixes, and buffer ownership with the pop sentinels. Two items remain open by
-   choice: narrowing the return types of the accessors that cannot fail, and the
-   C-call seam left over from P5.
+7. P6 correctness bugs surfaced by the P3 doc pass — done, across five PRs: the
+   error contract, the device guards, the Bayer phase and minor camera fixes,
+   buffer ownership with the pop sentinels, and finally the deferred sweep that
+   narrowed the return types of the accessors that cannot fail. The only item
+   left open anywhere is the C-call seam from P5.
