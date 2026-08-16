@@ -86,8 +86,9 @@ const (
 // A buffer in your hands is released either by pushing it to a stream or by
 // calling Close on it. Do exactly one of the two: a buffer that is neither
 // pushed nor closed leaks, and one that is pushed twice, or closed after being
-// pushed, would be freed twice. The owned flag below enforces that, so the
-// second attempt returns an error rather than corrupting the heap.
+// pushed, would be freed twice. The owned flag below enforces that: a second
+// push is refused with ErrBufferNotOwned and a superfluous Close does nothing,
+// rather than either of them corrupting the heap.
 //
 // Branch on Buffer.IsNil rather than on the error when deciding whether there
 // is a buffer to release: Stream.TryPopBuffer legitimately returns a nil buffer
