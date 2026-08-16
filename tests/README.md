@@ -23,8 +23,12 @@ the GigE and USB3 interfaces before any test runs, which makes the suite:
 - **fast** — skipping the GigE/USB discovery scan takes the package from ~37 s
   to ~6 s.
 
-Set `ARAVIS_TEST_HARDWARE=1` to leave the real interfaces enabled and run
-against a physical camera instead; `make test-integration` does this.
+Set `ARAVIS_TEST_HARDWARE=1` to leave the real interfaces enabled and run the
+acquisition tests against a physical camera instead; `make test-integration`
+does this. In that mode `requireStreamingCamera` selects the first **non-Fake**
+device and fails when there is none, so the target cannot report success
+without having actually driven hardware. Tests that assert Fake's fixed
+identity or geometry keep using `Fake_1` in both modes.
 
 ### No silent skips
 
@@ -61,7 +65,7 @@ in isolation.
 
 | File | Covers |
 |---|---|
-| `fake_test.go` | `TestMain`, `requireFakeCamera`, `seededBuffer` — the backend every other file builds on |
+| `fake_test.go` | `TestMain`, `requireFakeCamera`, `requireStreamingCamera`, `seededBuffer` — the backend every other file builds on |
 | `interface_test.go` | device and interface discovery, enable/disable, out-of-range ids |
 | `camera_test.go` | camera identity, geometry, parameter round-trips, `*Fast` accessors, stream creation |
 | `buffer_test.go` | the fresh-buffer contract and the filled-buffer accessors, including multipart |
@@ -109,8 +113,14 @@ anything, and none are published (see the note at the top of
 
 ## Hardware testing
 
-With `ARAVIS_TEST_HARDWARE=1` the real interfaces stay enabled and the suite
-uses whatever it finds.
+With `ARAVIS_TEST_HARDWARE=1` the real interfaces stay enabled and the
+acquisition tests bind to the first non-Fake device, failing if none is
+present. `TestMultipleDevices` needs two *physical* devices — Fake is excluded
+from the count, so one attached camera plus Fake does not satisfy it.
+
+Assertions that only hold for Fake are relaxed in this mode: Fake delivers
+every frame intact, whereas a real GigE or USB3 link legitimately drops some,
+so the "no bad buffers" check becomes a rate check.
 
 ### GigE Vision
 
@@ -150,8 +160,9 @@ go test ./... 2>&1 | grep -c CRITICAL   # must be 0
 1. Assert something that can fail. A test that only calls `t.Logf` inflates
    coverage without providing signal, and removing that class of test is what
    P5 in `../PLAN.md` was about.
-2. Use `requireFakeCamera` and `seededBuffer` rather than re-deriving the
-   backend setup.
+2. Use `requireFakeCamera`, `requireStreamingCamera` and `seededBuffer` rather
+   than re-deriving the backend setup. Prefer `requireStreamingCamera` for
+   anything that only streams, so the hardware target really reaches hardware.
 3. Do not call `aravis.Shutdown()` from a test — `TestMain` owns it, and
    calling it mid-suite tears down the interface list the remaining tests
    depend on.

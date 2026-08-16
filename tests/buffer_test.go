@@ -129,12 +129,19 @@ func TestBufferAccessorsAgreeOnSeededData(t *testing.T) {
 		t.Fatalf("GetDataUnsafe() returned error: %v", err)
 	}
 
-	if size != len(want) {
-		t.Errorf("GetDataUnsafe() reported size %d, want %d", size, len(want))
+	if ptr == unsafe.Pointer(nil) {
+		t.Fatal("GetDataUnsafe() returned a nil pointer for a filled buffer")
 	}
 
-	if ptr == unsafe.Pointer(nil) {
-		t.Error("GetDataUnsafe() returned a nil pointer for a filled buffer")
+	if size != len(want) {
+		t.Fatalf("GetDataUnsafe() reported size %d, want %d", size, len(want))
+	}
+
+	// Checking the size and the pointer's non-nilness is not enough: a wrapper
+	// handing back a correctly sized pointer at the wrong offset would satisfy
+	// both. Compare what it actually points at.
+	if !bytes.Equal(unsafe.Slice((*byte)(ptr), size), want) {
+		t.Error("GetDataUnsafe() points at bytes that differ from the seeded payload")
 	}
 }
 

@@ -96,6 +96,10 @@ test-unit: ## Run the full hardware-free suite (Fake backend)
 	@CGO_ENABLED=$(CGO_ENABLED) $(GO) test -race ./...
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
+# ARAVIS_TEST_HARDWARE makes requireStreamingCamera select the first non-Fake
+# device and fail when there is none, so this target cannot report success
+# without having driven a physical camera. TestMultipleDevices additionally
+# needs two of them and skips otherwise.
 test-integration: ## Run against real hardware (requires a connected camera)
 	@echo "$(BOLD)Running integration tests...$(NC)"
 	@ARAVIS_TEST_HARDWARE=1 CGO_ENABLED=$(CGO_ENABLED) $(GO) test -v ./tests/ \

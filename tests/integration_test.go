@@ -20,7 +20,7 @@ func TestFullWorkflow(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	camera := requireFakeCamera(t)
+	camera, isFake := requireStreamingCamera(t)
 	defer camera.Close()
 
 	if err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS); err != nil {
@@ -30,7 +30,7 @@ func TestFullWorkflow(t *testing.T) {
 	stream, payloadSize := setUpStream(t, camera)
 	defer stream.Close()
 
-	acquireFrames(t, camera, stream, payloadSize)
+	acquireFrames(t, camera, stream, payloadSize, isFake)
 }
 
 // setUpStream creates a stream and primes it with buffers, returning the
@@ -66,7 +66,7 @@ func setUpStream(t *testing.T, camera aravis.Camera) (aravis.Stream, uint) {
 
 // acquireFrames pops frames until it has the number it wants or the stream
 // stops delivering, checking each one.
-func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, payloadSize uint) {
+func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, payloadSize uint, isFake bool) {
 	t.Helper()
 
 	if err := camera.StartAcquisition(); err != nil {
@@ -79,31 +79,68 @@ func acquireFrames(t *testing.T, camera aravis.Camera, stream aravis.Stream, pay
 		}
 	}()
 
-	const maxFrames = 10
+	const (
+		maxFrames = 10
+		// A hardware link may drop frames, so the loop retries; maxAttempts
+		// bounds that retrying. Without it the loop is bounded only by frames
+		// successfully acquired, and a camera delivering nothing but bad
+		// buffers would spin here indefinitely.
+		maxAttempts = 100
+	)
 
 	framesAcquired := 0
 
-	for framesAcquired < maxFrames {
+	for attempts := 0; framesAcquired < maxFrames; attempts++ {
+		if attempts >= maxAttempts {
+			t.Errorf("gave up after %d attempts with %d of %d frames acquired",
+				attempts, framesAcquired, maxFrames)
+
+			break
+		}
+
 		buffer, err := stream.TimeoutPopBuffer(time.Second)
 		if err != nil {
+			// A non-nil error does not mean there is no buffer: that result is
+			// cgo's errno rather than an Aravis failure (see P6), so ownership
+			// may still have transferred. Give it back before leaving, or
+			// Stream.Close cannot free it.
+			if !buffer.IsNil() {
+				stream.PushBuffer(buffer)
+			}
+
 			t.Logf("stopped after %d frames: %v", framesAcquired, err)
 
 			break
 		}
 
 		status, err := buffer.GetStatus()
+
+		// Both of the failures below used to `continue` without advancing
+		// framesAcquired, so a backend that kept returning bad buffers would
+		// spin here forever — the loop is bounded by frames acquired, not by
+		// iterations or by a deadline. Since either condition is already a hard
+		// failure, return the buffer and stop.
 		if err != nil {
 			t.Errorf("GetStatus() on frame %d returned error: %v", framesAcquired, err)
 			stream.PushBuffer(buffer)
 
-			continue
+			break
 		}
 
 		// The Fake backend drops no packets, so anything but SUCCESS is a real
-		// failure rather than the flaky-network case a hardware run allows for.
+		// failure rather than the flaky-link case a hardware run allows for.
 		if status != aravis.BUFFER_STATUS_SUCCESS {
-			t.Errorf("frame %d has status %d, want %d (SUCCESS)",
-				framesAcquired, status, aravis.BUFFER_STATUS_SUCCESS)
+			if isFake {
+				t.Errorf("frame %d has status %d, want %d (SUCCESS)",
+					framesAcquired, status, aravis.BUFFER_STATUS_SUCCESS)
+				stream.PushBuffer(buffer)
+
+				break
+			}
+
+			// On real hardware a dropped frame is not a test failure; retry
+			// until the pop above times out.
+			t.Logf("frame %d has status %d; retrying", framesAcquired, status)
 			stream.PushBuffer(buffer)
 
 			continue
@@ -179,7 +216,7 @@ func TestStreamingPerformance(t *testing.T) {
 		t.Skip("Skipping streaming performance test in short mode")
 	}
 
-	camera := requireFakeCamera(t)
+	camera, isFake := requireStreamingCamera(t)
 	defer camera.Close()
 
 	if err := camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_CONTINUOUS); err != nil {
@@ -275,9 +312,15 @@ func TestStreamingPerformance(t *testing.T) {
 	}
 
 	// Fake delivers every frame intact, so unlike a hardware run this tolerates
-	// no bad buffers at all.
-	if errorCount != 0 {
-		t.Errorf("%d buffers came back with a non-success status; want 0 on the Fake backend", errorCount)
+	// no bad buffers at all. A physical link legitimately drops some, so there
+	// the check is a rate rather than an absolute.
+	if isFake {
+		if errorCount != 0 {
+			t.Errorf("%d buffers came back with a non-success status; want 0 on the Fake backend", errorCount)
+		}
+	} else if errorCount > frameCount {
+		t.Errorf("%d bad buffers against %d good ones; the link is dropping more than half the frames",
+			errorCount, frameCount)
 	}
 }
 
@@ -298,11 +341,29 @@ func TestMultipleDevices(t *testing.T) {
 		t.Fatalf("GetNumDevices() returned error: %v", err)
 	}
 
-	if numDevices < 2 {
-		t.Skipf("%d device(s) present; this test needs two, which the Fake backend cannot provide", numDevices)
+	// Fake_1 is excluded deliberately. With one physical camera attached the
+	// device list holds two entries, and counting Fake as the second would let
+	// this test report success on independent multi-camera operation while
+	// only ever having driven one real device.
+	deviceIDs := make([]string, 0, numDevices)
+
+	for i := range numDevices {
+		id, err := aravis.GetDeviceId(i)
+		if err != nil {
+			t.Fatalf("GetDeviceId(%d) returned error: %v", i, err)
+		}
+
+		if id != fakeDeviceID {
+			deviceIDs = append(deviceIDs, id)
+		}
 	}
 
-	cameras := make([]aravis.Camera, 0, numDevices)
+	if len(deviceIDs) < 2 {
+		t.Skipf("%d physical device(s) present; this test needs two, and the Fake backend provides only itself",
+			len(deviceIDs))
+	}
+
+	cameras := make([]aravis.Camera, 0, len(deviceIDs))
 
 	defer func() {
 		for _, camera := range cameras {
@@ -310,14 +371,7 @@ func TestMultipleDevices(t *testing.T) {
 		}
 	}()
 
-	for i := range numDevices {
-		deviceID, err := aravis.GetDeviceId(i)
-		if err != nil {
-			t.Errorf("GetDeviceId(%d) returned error: %v", i, err)
-
-			continue
-		}
-
+	for _, deviceID := range deviceIDs {
 		camera, err := aravis.NewCamera(deviceID)
 		if err != nil {
 			t.Errorf("NewCamera(%s) returned error: %v", deviceID, err)
@@ -328,18 +382,38 @@ func TestMultipleDevices(t *testing.T) {
 		cameras = append(cameras, camera)
 	}
 
-	if len(cameras) != int(numDevices) {
-		t.Fatalf("opened %d of %d devices", len(cameras), numDevices)
+	if len(cameras) != len(deviceIDs) {
+		t.Fatalf("opened %d of %d devices", len(cameras), len(deviceIDs))
 	}
 
-	// Each camera must answer for itself rather than aliasing another's device.
+	// Distinct serials are the actual contract: they are what shows each Camera
+	// wraps its own ArvDevice rather than aliasing another's. Merely checking
+	// that the accessors return without error would pass even if every camera
+	// pointed at the same device.
+	seen := make(map[string]string, len(cameras))
+
 	for i, camera := range cameras {
-		if _, err := camera.GetVendorName(); err != nil {
-			t.Errorf("camera %d: GetVendorName() returned error: %v", i, err)
+		serial, err := camera.GetDeviceSerialNumber()
+		if err != nil {
+			t.Errorf("camera %d (%s): GetDeviceSerialNumber() returned error: %v", i, deviceIDs[i], err)
+
+			continue
 		}
 
-		if _, err := camera.GetDeviceSerialNumber(); err != nil {
-			t.Errorf("camera %d: GetDeviceSerialNumber() returned error: %v", i, err)
+		if previous, ok := seen[serial]; ok {
+			t.Errorf("camera %s reports serial %q, already reported by %s; the cameras are not independent",
+				deviceIDs[i], serial, previous)
 		}
+
+		seen[serial] = deviceIDs[i]
+	}
+
+	// Each camera must also stream on its own.
+	for i, camera := range cameras {
+		stream, payloadSize := setUpStream(t, camera)
+		acquireFrames(t, camera, stream, payloadSize, false)
+		stream.Close()
+
+		t.Logf("camera %d (%s) delivered frames of %d bytes", i, deviceIDs[i], payloadSize)
 	}
 }

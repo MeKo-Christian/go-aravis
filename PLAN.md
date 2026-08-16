@@ -290,7 +290,10 @@ possible.
       from ~37 s to ~6 s). It hard-fails rather than skipping when Fake is
       unreachable, since Fake ships in every libaravis 0.8 build and a green run
       full of skips is the false signal this phase exists to remove.
-      `ARAVIS_TEST_HARDWARE=1` keeps the real interfaces enabled.
+      `ARAVIS_TEST_HARDWARE=1` keeps the real interfaces enabled, and in that
+      mode the acquisition tests bind to the first non-Fake device and fail when
+      none is attached — otherwise `make test-integration` would report success
+      on hardware coverage it never exercised (raised in PR review).
       What that does *not* give is error-path injection: there is no way to make
       `arv_camera_set_region` fail on demand. Weigh that against the cost — a Go
       interface over the ~180 cgo calls would have to be threaded through every

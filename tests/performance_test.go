@@ -13,7 +13,11 @@ package tests
 // checked, not that the timings are comparable between runs — figures from a
 // shared runner are not, which is the point PERFORMANCE.md already makes.
 
-import "testing"
+import (
+	"testing"
+
+	aravis "github.com/MeKo-Christian/go-aravis"
+)
 
 // benchInt times a standard/fast pair of int accessors, failing rather than
 // timing an error path. Without the probe, a benchmark whose every iteration
@@ -65,10 +69,65 @@ func benchFloat(b *testing.B, name string, standard, fast func() (float64, error
 			b.Skipf("Get%sFast() = %v; this camera exposes no matching GenICam node", name, err)
 		}
 
+		// The probe above ran with the timer already started, so without this
+		// its cost lands in the reported figure — at CI's BENCHTIME=10x that is
+		// one call in eleven.
+		b.ResetTimer()
+
 		for range b.N {
 			_, _ = fast()
 		}
 	})
+}
+
+// probeBuffer checks every buffer accessor once, outside any timed region, so
+// that a broken one fails the benchmark instead of being timed on its error
+// path — which would report an encouragingly small number for a call that does
+// nothing.
+func probeBuffer(b *testing.B, buffer aravis.Buffer, dest []byte) {
+	b.Helper()
+
+	if _, err := buffer.GetData(); err != nil {
+		b.Fatalf("GetData() returned error: %v", err)
+	}
+
+	if _, err := buffer.GetDataSlice(); err != nil {
+		b.Fatalf("GetDataSlice() returned error: %v", err)
+	}
+
+	if _, err := buffer.GetDataInto(dest); err != nil {
+		b.Fatalf("GetDataInto() returned error: %v", err)
+	}
+
+	if _, _, err := buffer.GetDataUnsafe(); err != nil {
+		b.Fatalf("GetDataUnsafe() returned error: %v", err)
+	}
+}
+
+// probeCameraGeometry checks the camera accessors the streaming-loop
+// benchmarks use, for the same reason as probeBuffer.
+func probeCameraGeometry(b *testing.B, camera aravis.Camera) {
+	b.Helper()
+
+	if _, err := camera.GetWidth(); err != nil {
+		b.Fatalf("GetWidth() returned error: %v", err)
+	}
+
+	if _, err := camera.GetHeight(); err != nil {
+		b.Fatalf("GetHeight() returned error: %v", err)
+	}
+
+	if _, err := camera.GetWidthFast(); err != nil {
+		b.Fatalf("GetWidthFast() returned error: %v", err)
+	}
+
+	if _, err := camera.GetHeightFast(); err != nil {
+		b.Fatalf("GetHeightFast() returned error: %v", err)
+	}
+
+	if _, err := camera.GetExposureTime(); err != nil {
+		b.Fatalf("GetExposureTime() returned error: %v", err)
+	}
 }
 
 // BenchmarkParameterAccess compares the standard and *Fast parameter
@@ -94,6 +153,8 @@ func BenchmarkParameterAccess(b *testing.B) {
 func BenchmarkBufferDataAccess(b *testing.B) {
 	buffer, want := seededBuffer(b)
 	destBuffer := make([]byte, len(want))
+
+	probeBuffer(b, buffer, destBuffer)
 
 	b.Run("GetData", func(b *testing.B) {
 		b.SetBytes(int64(len(want)))
@@ -147,6 +208,9 @@ func BenchmarkCombinedOperations(b *testing.B) {
 
 	destBuffer := make([]byte, len(want))
 
+	probeBuffer(b, buffer, destBuffer)
+	probeCameraGeometry(b, camera)
+
 	b.Run("StreamingLoop/Standard", func(b *testing.B) {
 		b.SetBytes(int64(len(want)))
 		b.ReportAllocs()
@@ -195,6 +259,9 @@ func BenchmarkMemoryAllocations(b *testing.B) {
 	defer camera.Close()
 
 	destBuffer := make([]byte, len(want))
+
+	probeBuffer(b, buffer, destBuffer)
+	probeCameraGeometry(b, camera)
 
 	b.Run("Allocations/StandardMethods", func(b *testing.B) {
 		b.ReportAllocs()

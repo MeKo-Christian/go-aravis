@@ -42,11 +42,17 @@ const (
 // machine cannot change an assertion), and fast — the GigE/USB discovery scan
 // this suite paid on every UpdateDeviceList was ~1 s a call.
 //
-// Set ARAVIS_TEST_HARDWARE=1 to keep the real interfaces enabled; the tests
-// that genuinely need a camera then find one, and everything else keeps using
-// Fake_1.
+// Set ARAVIS_TEST_HARDWARE=1 to keep the real interfaces enabled. The
+// acquisition tests then drive a physical camera through
+// requireStreamingCamera, which fails when none is attached; tests that assert
+// Fake's fixed identity keep using Fake_1 either way.
 func TestMain(m *testing.M) {
 	os.Exit(run(m))
+}
+
+// hardwareMode reports whether the suite was asked to drive a physical camera.
+func hardwareMode() bool {
+	return os.Getenv("ARAVIS_TEST_HARDWARE") != ""
 }
 
 func run(m *testing.M) int {
@@ -55,7 +61,7 @@ func run(m *testing.M) int {
 	// mid-suite dismantled the interface list the remaining tests rely on.
 	defer aravis.Shutdown()
 
-	if err := selectFakeBackend(os.Getenv("ARAVIS_TEST_HARDWARE") != ""); err != nil {
+	if err := selectFakeBackend(hardwareMode()); err != nil {
 		fmt.Fprintf(os.Stderr, "cannot set up the Aravis Fake backend: %v\n", err)
 
 		return 1
@@ -114,6 +120,10 @@ func selectFakeBackend(keepHardware bool) error {
 // requireFakeCamera returns a camera backed by the Fake interface. The caller
 // owns it and must close it — several lifecycle tests are about exactly who
 // closes it and how often, so no Cleanup is registered here.
+//
+// Use this for tests that assert Fake's fixed identity or geometry. Tests that
+// only exercise streaming should use requireStreamingCamera, so that the
+// hardware target actually reaches the hardware.
 func requireFakeCamera(tb testing.TB) aravis.Camera {
 	tb.Helper()
 
@@ -127,6 +137,67 @@ func requireFakeCamera(tb testing.TB) aravis.Camera {
 	}
 
 	return camera
+}
+
+// requireStreamingCamera returns the camera an acquisition test should drive,
+// and whether it is the Fake device.
+//
+// Under ARAVIS_TEST_HARDWARE it returns the first *non-Fake* device and fails
+// when there is none, so `make test-integration` cannot report success without
+// having touched a physical camera. Otherwise it returns Fake_1.
+//
+// The bool is what lets a caller keep its assertions honest in both modes:
+// Fake delivers every frame intact, a real GigE or USB3 link does not, so an
+// assertion like "no buffer came back with a bad status" is only correct
+// against Fake.
+func requireStreamingCamera(tb testing.TB) (camera aravis.Camera, isFake bool) {
+	tb.Helper()
+
+	if !hardwareMode() {
+		return requireFakeCamera(tb), true
+	}
+
+	deviceID := firstHardwareDeviceID(tb)
+
+	camera, err := aravis.NewCamera(deviceID)
+	if err != nil {
+		tb.Fatalf("NewCamera(%s) returned error: %v", deviceID, err)
+	}
+
+	if camera.IsNil() {
+		tb.Fatalf("NewCamera(%s) returned a nil camera", deviceID)
+	}
+
+	return camera, false
+}
+
+// firstHardwareDeviceID returns the id of the first device that is not the
+// Fake one, failing when the only thing attached is Fake itself.
+func firstHardwareDeviceID(tb testing.TB) string {
+	tb.Helper()
+
+	aravis.UpdateDeviceList()
+
+	numDevices, err := aravis.GetNumDevices()
+	if err != nil {
+		tb.Fatalf("GetNumDevices() returned error: %v", err)
+	}
+
+	for i := range numDevices {
+		id, err := aravis.GetDeviceId(i)
+		if err != nil {
+			tb.Fatalf("GetDeviceId(%d) returned error: %v", i, err)
+		}
+
+		if id != fakeDeviceID {
+			return id
+		}
+	}
+
+	tb.Fatalf("ARAVIS_TEST_HARDWARE is set but the only device present is %s; "+
+		"attach a camera or drop the variable", fakeDeviceID)
+
+	return ""
 }
 
 // seededBuffer returns a filled buffer whose bytes follow a deterministic
@@ -180,9 +251,22 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 
 	filled, popErr := stream.TimeoutPopBuffer(popTimeout)
 
-	// Stop as soon as the frame is in hand: the popped buffer belongs to us
-	// (it was never pushed back), so it stays valid, and no acquisition thread
-	// keeps running underneath a benchmark.
+	// A popped buffer belongs to the caller: Stream.Close frees only what is
+	// still sitting in the stream's queues, and Buffer has no Close of its own
+	// (see P6 in PLAN.md), so pushing it back is the only way to release it.
+	//
+	// This is registered after the stream's own cleanup, and t.Cleanup runs
+	// last-in-first-out, so the push-back happens before Stream.Close — which
+	// is what makes Stream.Close able to free it. It is registered before the
+	// error checks below because TimeoutPopBuffer can hand back a valid buffer
+	// alongside a non-nil error: that error is cgo's errno, not an Aravis
+	// failure (P6 again).
+	if !filled.IsNil() {
+		tb.Cleanup(func() { stream.PushBuffer(filled) })
+	}
+
+	// Stop as soon as the frame is in hand: nothing should keep acquiring
+	// underneath a benchmark.
 	if err := camera.StopAcquisition(); err != nil {
 		tb.Errorf("StopAcquisition() returned error: %v", err)
 	}

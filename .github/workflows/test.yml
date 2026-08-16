@@ -204,12 +204,18 @@ jobs:
       #   TestFastAccessorsMatchStandard/{ExposureTime,Gain}
       #                                Fake exposes no such GenICam node
       #
-      # -v is load-bearing: without it `go test` prints no SKIP lines at all
-      # and this guard would silently pass no matter what.
+      # The names are anchored and matched in full. An earlier version of this
+      # guard allowed the prefix `TestFastAccessorsMatchStandard/`, which also
+      # covered its Width and Height subtests — so those could start skipping
+      # without the guard noticing, which is the exact failure it exists to
+      # catch.
+      #
+      # -v is load-bearing too: without it `go test` prints no SKIP lines at
+      # all and this guard would pass no matter what.
       run: |
         go test -v ./... 2>&1 | tee test-output.txt
         if grep -E '^\s*--- SKIP' test-output.txt \
-             | grep -vE 'TestMultipleDevices|FirstAvailable|TestFastAccessorsMatchStandard/'; then
+             | grep -vE '(^|[[:space:]])(TestMultipleDevices|TestNewCameraFirstAvailable|TestOpenDeviceFirstAvailable|TestFastAccessorsMatchStandard/(ExposureTime|Gain))[[:space:]]*\('; then
           echo "::error::unexpected test skip; the Fake backend may be unavailable"
           exit 1
         fi
