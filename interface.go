@@ -13,18 +13,22 @@ import (
 // GetDeviceId returns the id of the device at index in the device list, which
 // can be passed to [NewCamera] or [OpenDevice]. Call [UpdateDeviceList] before
 // enumerating; index must be less than the count returned by [GetNumDevices].
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure. An out-of-range index yields the empty string.
 func GetDeviceId(index uint) (string, error) {
-	s, err := C.arv_get_device_id(C.uint(index))
-	return C.GoString(s), err
+	return C.GoString(C.arv_get_device_id(C.uint(index))), nil
 }
 
 // GetInterfaceId returns the id of the interface at index, for example "GigEVision"
 // or "USB3Vision". The index must be less than the count returned by
 // [GetNumInterface]. The id is what [EnableInterface] and [DisableInterface]
 // expect.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure. An out-of-range index yields the empty string.
 func GetInterfaceId(index uint) (string, error) {
-	s, err := C.arv_get_interface_id(C.uint(index))
-	return C.GoString(s), err
+	return C.GoString(C.arv_get_interface_id(C.uint(index))), nil
 }
 
 // DisableInterface removes the interface with the given id from the list of
@@ -49,15 +53,19 @@ func EnableInterface(id string) {
 // GetNumDevices returns the number of devices found by the last device scan.
 // Call [UpdateDeviceList] first, otherwise the count reflects an empty or
 // outdated list.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func GetNumDevices() (uint, error) {
-	n, err := C.arv_get_n_devices()
-	return uint(n), err
+	return uint(C.arv_get_n_devices()), nil
 }
 
 // GetNumInterface returns the number of available interfaces.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func GetNumInterface() (uint, error) {
-	n, err := C.arv_get_n_interfaces()
-	return uint(n), err
+	return uint(C.arv_get_n_interfaces()), nil
 }
 
 // GetNumInferface is a misspelling of [GetNumInterface].

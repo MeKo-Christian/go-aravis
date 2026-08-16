@@ -27,6 +27,7 @@ package aravis
 import "C"
 
 import (
+	"errors"
 	"unsafe"
 )
 
@@ -85,9 +86,9 @@ const (
 // Since this package exposes no way to release a buffer on its own, a buffer is
 // leaked whenever it is in the caller's hands and the stream goes away: one that
 // NewBuffer created and nothing ever pushed, and one that was popped and never
-// pushed back. Push a popped buffer back even on an error path — the pop methods
-// can return a non-nil buffer together with a non-nil error, so branch on
-// Buffer.IsNil rather than on the error.
+// pushed back. Branch on Buffer.IsNil rather than on the error when deciding
+// whether there is a buffer to push back: Stream.TryPopBuffer legitimately
+// returns a nil buffer with a nil error when the output queue is empty.
 type Buffer struct {
 	buffer *C.struct__ArvBuffer
 }
@@ -99,17 +100,16 @@ type Buffer struct {
 //
 // The returned buffer is meant to be handed to a stream with
 // Stream.PushBuffer, which takes over ownership; see Buffer for the ownership
-// rules. On failure a zero Buffer (IsNil reports true) is returned.
+// rules. arv_buffer_new has no error channel, so the only failure this can
+// report is a NULL result, in which case a zero Buffer (IsNil reports true) is
+// returned together with an error.
 func NewBuffer(size uint) (Buffer, error) {
-	var buf Buffer
-
-	buffer, err := C.arv_buffer_new(C.size_t(size), nil)
-	if err != nil || buffer == nil {
-		return Buffer{nil}, err
-	} else {
-		buf.buffer = buffer
-		return buf, err
+	buffer := C.arv_buffer_new(C.size_t(size), nil)
+	if buffer == nil {
+		return Buffer{}, errors.New("aravis returned a null pointer")
 	}
+
+	return Buffer{buffer: buffer}, nil
 }
 
 // GetData returns a copy of the buffer payload in a freshly allocated Go
@@ -123,10 +123,13 @@ func NewBuffer(size uint) (Buffer, error) {
 //
 // Check GetStatus first: GetData returns whatever bytes are in the buffer even
 // when acquisition failed.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func (b *Buffer) GetData() ([]byte, error) {
-	buf, err := C.arv_go_buffer_get_data(b.buffer)
+	buf := C.arv_go_buffer_get_data(b.buffer)
 
-	return C.GoBytes(buf.data, C.int(buf.size)), err
+	return C.GoBytes(buf.data, C.int(buf.size)), nil
 }
 
 // GetDataUnsafe returns a pointer into the C payload memory together with its
@@ -141,11 +144,11 @@ func (b *Buffer) GetData() ([]byte, error) {
 //
 // Prefer GetDataSlice for a typed view of the same memory, or GetDataInto if
 // you want an allocation-free copy you can keep.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
-	buf, err := C.arv_go_buffer_get_data(b.buffer)
-	if err != nil {
-		return nil, 0, err
-	}
+	buf := C.arv_go_buffer_get_data(b.buffer)
 
 	return buf.data, int(buf.size), nil
 }
@@ -166,11 +169,11 @@ func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
 //
 // Use GetData for a self-contained copy, or GetDataInto to copy without
 // allocating.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func (b *Buffer) GetDataSlice() ([]byte, error) {
-	buf, err := C.arv_go_buffer_get_data(b.buffer)
-	if err != nil {
-		return nil, err
-	}
+	buf := C.arv_go_buffer_get_data(b.buffer)
 
 	if buf.data == nil || buf.size == 0 {
 		return nil, nil
@@ -193,11 +196,11 @@ func (b *Buffer) GetDataSlice() ([]byte, error) {
 // testing.AllocsPerRun. Unlike GetDataSlice and GetDataUnsafe the resulting
 // bytes live in dest, so they remain valid after the buffer is pushed back to
 // the stream; unlike GetData no new slice is allocated per frame.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func (b *Buffer) GetDataInto(dest []byte) (int, error) {
-	buf, err := C.arv_go_buffer_get_data(b.buffer)
-	if err != nil {
-		return 0, err
-	}
+	buf := C.arv_go_buffer_get_data(b.buffer)
 	if buf.data == nil || buf.size == 0 || len(dest) == 0 {
 		return 0, nil
 	}
@@ -218,9 +221,11 @@ func (b *Buffer) GetDataInto(dest []byte) (int, error) {
 // trustworthy. Anything else (BUFFER_STATUS_MISSING_PACKETS and
 // BUFFER_STATUS_TIMEOUT are the common ones in practice) indicates a frame
 // that should be discarded rather than decoded.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure. The acquisition outcome is the status value itself.
 func (b *Buffer) GetStatus() (int, error) {
-	status, err := C.arv_buffer_get_status(b.buffer)
-	return int(status), err
+	return int(C.arv_buffer_get_status(b.buffer)), nil
 }
 
 // IsNil reports whether the buffer holds no underlying ArvBuffer. This is true
@@ -237,9 +242,11 @@ func (b *Buffer) IsNil() bool {
 //
 // Valid part indices for the other Get Part accessors are 0 to the returned
 // count minus one.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure.
 func (b *Buffer) GetNumParts() (int, error) {
-	numParts, err := C.arv_buffer_get_n_parts(b.buffer)
-	return int(numParts), err
+	return int(C.arv_buffer_get_n_parts(b.buffer)), nil
 }
 
 // GetPartData returns a copy of the payload of the part at partIndex, wrapping
@@ -249,16 +256,19 @@ func (b *Buffer) GetNumParts() (int, error) {
 //
 // partIndex must be less than GetNumParts; an out-of-range index is not checked
 // here and is passed straight to Aravis.
+//
+// The returned error is always nil; the underlying Aravis call cannot report a
+// failure. An empty part yields a nil slice.
 func (b *Buffer) GetPartData(partIndex int) ([]byte, error) {
 	var size C.size_t
 
-	data, err := C.arv_buffer_get_part_data(
+	data := C.arv_buffer_get_part_data(
 		b.buffer,
 		C.guint(partIndex),
 		&size,
 	)
-	if err != nil {
-		return nil, err
+	if data == nil || size == 0 {
+		return nil, nil
 	}
 
 	return C.GoBytes(data, C.int(size)), nil
