@@ -273,10 +273,8 @@ possible.
       resulting 0 as a result. Run against a seeded buffer the accessors are
       assertable. `go test ./... 2>&1 | grep -c CRITICAL` went from 2 to 0, and
       that check is now part of the verification routine.
-      Three contracts were deliberately *not* asserted, because Aravis does not
-      offer them: `GetDeviceId`/`GetInterfaceId` past the end return a nil error
-      (that result is cgo's `errno`, see P6), so only the empty string is
-      asserted; the Fake camera exposes no `ExposureTime`/`Gain` GenICam node, so
+      Two contracts were deliberately *not* asserted, because Aravis does not
+      offer them: the Fake camera exposes no `ExposureTime`/`Gain` GenICam node, so
       the corresponding `*Fast` accessors are probed and skipped rather than
       pinning a backend quirk as this binding's contract; and
       `NewCamera("")`/`OpenDevice("")` still skip, for the reason recorded under
@@ -353,27 +351,76 @@ Aravis call it wraps, which surfaced a fresh set of bugs. None were fixed in the
 docs-only pass; the documentation describes current behavior, including where that
 behavior is wrong. Ordered by severity.
 
-- [ ] **`errno` is being reported as an error across the package.** Many methods use
+- [x] **`errno` is being reported as an error across the package.** Many methods used
       cgo's two-result form (`v, err := C.arv_...`), where the second value is `errno`.
       `errno` is not cleared by a successful call, so a stale or incidental value makes
       a successful call return a non-nil error. Only the `GError` should decide failure.
-      Affects all 12 `*Fast` methods in `performance.go`, plus `GetData`, `GetDataSlice`,
+      Affected all 12 `*Fast` methods in `performance.go`, plus `GetData`, `GetDataSlice`,
       `GetDataUnsafe`, `GetDataInto`, `GetStatus`, `GetNumParts`, `GetPartData` and the
-      three pop methods. Worst case is `NewBuffer` (`buffer.go`), whose
-      `if err != nil || buffer == nil` reports failure *and* drops the successfully
-      allocated `ArvBuffer` on the floor, leaking it — it should key off `buffer == nil`
-      alone.
+      three pop methods. Worst case was `NewBuffer` (`buffer.go`), whose
+      `if err != nil || buffer == nil` reported failure *and* dropped the successfully
+      allocated `ArvBuffer` on the floor, leaking it.
+      **Resolved.** Read against `/usr/include/aravis-0.8/*.h`, the sites split in two.
+      Sixteen wrap C functions with no `GError**` at all — the four `interface.go` id and
+      count accessors, eight `buffer.go` accessors, and the three pops — so their error
+      could only ever have been noise; they now use the single-result cgo form and return
+      `nil`. The seven `*Fast` getters already bound the `GError` correctly and only
+      leaked `errno` on the success path; they return `nil` there now, and the five
+      `*Fast` setters were already correct. `NewBuffer` keys off `buffer == nil` alone
+      and returns an error on NULL, where it previously returned `Buffer{nil}, nil`.
+      `Camera.GetDeviceId` and `GetDeviceSerialNumber` shed a dead `var err error` and a
+      misleading trailing `, err` — a readability fix, not a bug, since the shadowed
+      `err :=` was already returned by the inner return.
+      **The mechanism is narrower than this item originally claimed, and the correction
+      matters.** Since Go 1.12 cgo emits `errno = 0` immediately before the call in the
+      two-result form (golang.org/issue/28832), so an `errno` left behind by an *earlier*
+      call cannot leak into a *later* one — "stale `errno`" is not the exposure. What
+      survives is `errno` set *during* the call by a syscall the C function makes
+      internally, which fails benignly all the time: a `recvfrom` returning `EAGAIN` on a
+      GigE Vision socket, a `stat` of a file that is not there during GenICam lookup. The
+      wrapper then reports a failure that did not happen. The bug is real; the mechanism
+      is incidental rather than stale `errno`. It also means the Fake backend cannot
+      reproduce it — Fake performs no syscalls at all, which was confirmed by reading
+      `errno` after every affected call and finding it zero throughout.
+      Three things keep it from coming back. `internal/cerrno` reduces the defect to its
+      smallest instance — one C function that fails an `open` internally and then
+      succeeds, called both ways — and `internal/cerrno/cerrno_test.go` asserts that the
+      two-result form reports `ENOENT` for that success while the single-result form has
+      no error to get wrong. `cgo_form_test.go` parses the package's non-test sources and
+      fails on any two-result assignment from a `C.*` call, so the form cannot reappear
+      anywhere. `tests/errno_test.go` table-drives every affected accessor against the
+      nil-error contract its documentation now promises. And the workarounds this bug
+      forced on the suite are gone:
+      `tests/interface_test.go` now asserts `("", nil)` in full, `selectFakeBackend`
+      checks its errors, and both pop sites branch on the error rather than on
+      `Buffer.IsNil`.
+      Signatures were deliberately left alone; see the deferred narrowing item below.
 - [x] **`Device.ReadMemory(addr, 0)` panics.** It does `make([]byte, size)` then takes
       `&buffer[0]`, which is out of range for a zero size. `WriteMemory` has the
       equivalent guard; `ReadMemory` does not.
       **Fixed.** A zero size now returns an error rather than an empty slice, so the two
       memory calls agree: a zero-length transfer is a caller mistake, not a request worth
       forwarding. The doc comment, which described the panic as the contract, says so.
-- [ ] **The generic `Device` getters swallow every GenICam error.**
-      `GetStringFeatureValue`, `GetIntegerFeatureValue` and `GetFloatFeatureValue` pass
-      `nil` for the `GError` out-param, so a failure returns the zero value with no
-      error — and the error they *do* return is the `errno` above. This is the read-side
-      counterpart of the P0 fix to the setters.
+- [x] **The generic `Device` getters swallow every GenICam error.**
+      `GetStringFeatureValue`, `GetIntegerFeatureValue` and `GetFloatFeatureValue` passed
+      `nil` for the `GError` out-param, so a failure returned the zero value with no
+      error — and the error they *did* return was the `errno` above. This is the
+      read-side counterpart of the P0 fix to the setters.
+      **Resolved.** All three now mirror the setters directly above them: a `gerror`
+      local passed by address, `C.free(cfeature)` before the error branch so the failure
+      path does not leak the feature name, and `errorFromGError` on a set `GError`. The
+      `gchar*` the string getter returns is `transfer-ownership="none"`, so it is not
+      freed; `C.GoString` copies it.
+      `tests/device_feature_test.go` pins the new contract against the Fake backend:
+      reading `NoSuchFeatureAtAll` yields an `*AravisError` with
+      `DEVICE_ERROR_FEATURE_NOT_FOUND` on all three getters (previously `("", nil)`),
+      a wrong-typed read yields `DEVICE_ERROR_WRONG_FEATURE`, and a `*Fast`/standard
+      parity check covers both the happy and the error path — it only passes once both
+      sides are fixed. The happy paths use the nodes Fake actually has:
+      `DeviceVendorName`, `Width` and `ExposureTimeAbs` (there is no `ExposureTime` and
+      no `Gain`). `examples/register_access` probes feature existence with
+      `if _, err := device.GetStringFeatureValue(f); err == nil` — silently broken until
+      now, and correct as written afterwards, with no code change needed.
 - [x] **`TakeControl`/`LeaveControl` cast unconditionally via `ARV_GV_DEVICE()`** with no
       `ARV_IS_GV_DEVICE` check, so calling either on a USB3 Vision device trips a GLib
       critical and passes a bad pointer.
@@ -430,6 +477,19 @@ behavior is wrong. Ordered by severity.
       popped buffer that is never pushed back. Raised in PR review, where it also turned
       out the P3 docs had this backwards — they claimed a popped buffer stayed
       stream-owned. The docs are corrected; the API gap stands.
+- [ ] **Narrow the return types of the accessors that cannot fail.** The errno fix left
+      every signature intact, so a growing set of methods returns an `error` that is
+      documented as always nil: `Buffer.GetData`, `GetDataUnsafe`, `GetDataSlice`,
+      `GetDataInto`, `GetStatus`, `GetNumParts`, `GetPartData`, `GetPartComponentId`,
+      `GetPartDataType`, `GetPartPixelFormat`, `GetPartWidth`, `GetPartHeight`,
+      `GetPartX`, `GetPartY`, `FindComponent`, `Stream.PopBuffer`,
+      `Stream.TryPopBuffer`, and the four package-level accessors `GetDeviceId`,
+      `GetInterfaceId`, `GetNumDevices`, `GetNumInterface`. Dropping the `error` is a
+      breaking change at every call site, so it is deliberately deferred and should land
+      in one sweep together with the remaining P6 API changes (`Stream.PushBuffer`
+      gaining an `error`, `Buffer.Close`, the part range checks) — callers then migrate
+      once instead of three times. `unparam` is enabled in `.golangci.toml` and does not
+      fire on these, so the interim state stays lint-clean.
 - [ ] **Minor:** `GetPartData` and the part accessors do not range-check `partIndex`
       against `GetNumParts`. Still open; the other two items of this bullet are done.
       **Resolved:** `SetGainAuto` now has a `GetGainAuto` counterpart wrapping

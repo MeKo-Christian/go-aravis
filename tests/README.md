@@ -10,7 +10,12 @@ Aravis ships a software interface named `Fake` that produces a real
 `ArvDevice`, a real `ArvStream` and real, filled buffers. It is not a mock: the
 calls go through the same C layer a physical camera would, which is what makes
 it useful for a binding whose bugs live in that layer — pointer widths,
-`GError` versus `errno`, ownership and unref counts, NULL sentinels.
+`GError` versus `errno`, ownership and unref counts, NULL sentinels. The
+`GError`-versus-`errno` class is not just a worry: `errno_test.go` requires
+every accessor whose C function cannot fail to report success, and
+`internal/cerrno` reduces the defect itself to one C function that fails a
+syscall internally and succeeds anyway — called through cgo's two-result form it
+reports `ENOENT` for that success.
 
 `fake_test.go` owns the selection. Its `TestMain` enables `Fake` and disables
 the GigE and USB3 interfaces before any test runs, which makes the suite:
@@ -75,12 +80,17 @@ in isolation.
 | `integration_test.go` | the full acquisition workflow and sustained streaming |
 | `performance_test.go` | benchmarks |
 | `bayer_test.go` | the debayering edge cases (pure Go, no backend needed) |
+| `device_feature_test.go` | the generic `Device` feature getters: missing feature, wrong type, happy path, `*Fast` parity |
+| `errno_test.go` | the accessors whose C call has no `GError` must return a nil error |
 
 Pure-Go units — the error mapping, `toBool`, `closeFlag`, the C-string cache —
 are tested in the **root package** instead (`internal_test.go`,
-`lifecycle_test.go`, `performance_cache_test.go`), because they need access to
-unexported identifiers. Go forbids `import "C"` in `_test.go` files, which is
-why those files carefully avoid naming any C type.
+`lifecycle_test.go`, `performance_cache_test.go`, `cgo_form_test.go`), because
+they need access to unexported identifiers. Go forbids `import "C"` in
+`_test.go` files, which is why those files carefully avoid naming any C type —
+`cgo_form_test.go` only *parses* the package sources, which needs no cgo. The
+same restriction is why the two-result cgo form is demonstrated from the non-test
+package `internal/cerrno`, whose own test is pure Go.
 
 ## Running
 
