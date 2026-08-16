@@ -2,6 +2,7 @@ package tests
 
 import (
 	"testing"
+	"time"
 	"unsafe"
 
 	aravis "github.com/MeKo-Christian/go-aravis"
@@ -222,7 +223,7 @@ func TestBufferWithRealCamera(t *testing.T) {
 	defer camera.StopAcquisition()
 
 	// Try to get a frame
-	buffer, err = stream.TimeoutPopBuffer(1000) // 1 second timeout
+	buffer, err = stream.TimeoutPopBuffer(time.Second)
 	if err != nil {
 		t.Logf("Failed to get frame (timeout expected): %v", err)
 		return
