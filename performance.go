@@ -10,8 +10,13 @@ import (
 	"unsafe"
 )
 
-// Common GenICam feature names pre-allocated as C strings
-// This eliminates repeated C.CString allocations for frequently used features
+// Common GenICam feature names pre-allocated as C strings.
+// This eliminates repeated C.CString allocations for frequently used features.
+//
+// The cache is intentionally never freed: entries are interned GenICam feature
+// names, bounded by the feature set a program actually touches (tens of entries,
+// a few hundred bytes total). getCachedCString hands out raw *C.char pointers
+// with no refcounting or lifetime tracking, so freeing them could not be made safe.
 var (
 	cStringCache      = make(map[string]*C.char)
 	cStringCacheMutex sync.RWMutex
@@ -204,16 +209,4 @@ func (d *Device) SetFloatFeatureValueFast(feature string, value float64) error {
 		err = errorFromGError(gerror)
 	}
 	return err
-}
-
-// Cleanup function for graceful shutdown (optional)
-// Call this before program exit to free cached C strings
-func CleanupPerformanceCache() {
-	cStringCacheMutex.Lock()
-	defer cStringCacheMutex.Unlock()
-
-	for _, cstr := range cStringCache {
-		C.free(unsafe.Pointer(cstr))
-	}
-	cStringCache = make(map[string]*C.char)
 }

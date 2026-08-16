@@ -8,10 +8,6 @@ import (
 
 // TestPerformanceStringCaching tests the string caching functionality.
 func TestPerformanceStringCaching(t *testing.T) {
-	// Test that cleanup function exists and doesn't crash
-	aravis.CleanupPerformanceCache()
-	t.Log("CleanupPerformanceCache() completed successfully")
-
 	// Test with camera if available
 	aravis.UpdateDeviceList()
 
