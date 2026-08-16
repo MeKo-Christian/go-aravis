@@ -1,12 +1,25 @@
 package aravis
 
 // #cgo pkg-config: aravis-0.8
-// // arv_buffer_get_data only writes the size through the pointer it is given
-// // and never retains it, so cgo may keep the size out-param on the Go stack.
-// // Without this, every call heap-allocates the out-param.
-// #cgo noescape arv_buffer_get_data
-// #cgo nocallback arv_buffer_get_data
 // #include <arv.h>
+//
+// // arv_buffer_get_data reports the size through an out-param. Passing a Go
+// // pointer for it forces cgo to heap-allocate the local on every call, which
+// // is the only allocation left in the hot GetDataInto path. Returning both
+// // values in a struct keeps every pointer on the C side, so the accessors
+// // below allocate nothing. (#cgo noescape would also work, but it requires a
+// // Go 1.23 language version and this module still supports the 1.23 baseline.)
+// typedef struct {
+//     const void *data;
+//     size_t size;
+// } ArvGoBufferData;
+//
+// static ArvGoBufferData arv_go_buffer_get_data(ArvBuffer *buffer) {
+//     ArvGoBufferData result;
+//     result.size = 0;
+//     result.data = arv_buffer_get_data(buffer, &result.size);
+//     return result;
+// }
 import "C"
 
 import (
@@ -42,66 +55,58 @@ func NewBuffer(size uint) (Buffer, error) {
 }
 
 func (b *Buffer) GetData() ([]byte, error) {
-	var size C.size_t
+	buf, err := C.arv_go_buffer_get_data(b.buffer)
 
-	data, err := C.arv_buffer_get_data(b.buffer, &size)
-
-	return C.GoBytes(data, C.int(size)), err
+	return C.GoBytes(buf.data, C.int(buf.size)), err
 }
 
 // GetDataUnsafe returns a direct pointer to the buffer data for zero-copy access
 // WARNING: The returned pointer is only valid until the buffer is freed or reused
 // This is for high-performance applications that need to avoid memory copies
 func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
-	var size C.size_t
-
-	data, err := C.arv_buffer_get_data(b.buffer, &size)
+	buf, err := C.arv_go_buffer_get_data(b.buffer)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return data, int(size), nil
+	return buf.data, int(buf.size), nil
 }
 
 // GetDataSlice returns a Go slice that directly references the C buffer memory
 // WARNING: The slice is only valid until the buffer is freed or reused
 // This provides zero-copy access but requires careful memory management
 func (b *Buffer) GetDataSlice() ([]byte, error) {
-	var size C.size_t
-
-	data, err := C.arv_buffer_get_data(b.buffer, &size)
+	buf, err := C.arv_go_buffer_get_data(b.buffer)
 	if err != nil {
 		return nil, err
 	}
 
-	if data == nil || size == 0 {
+	if buf.data == nil || buf.size == 0 {
 		return nil, nil
 	}
 
 	// unsafe.Slice aliases the C buffer memory directly (zero-copy). The
 	// returned slice is only valid until the buffer is freed or reused.
-	return unsafe.Slice((*byte)(data), int(size)), nil
+	return unsafe.Slice((*byte)(buf.data), int(buf.size)), nil
 }
 
 // GetDataInto copies buffer data into dest and returns the number of bytes
 // copied, truncating to len(dest). It performs a single copy out of the C
 // buffer and allocates nothing.
 func (b *Buffer) GetDataInto(dest []byte) (int, error) {
-	var size C.size_t
-
-	data, err := C.arv_buffer_get_data(b.buffer, &size)
+	buf, err := C.arv_go_buffer_get_data(b.buffer)
 	if err != nil {
 		return 0, err
 	}
-	if data == nil || size == 0 || len(dest) == 0 {
+	if buf.data == nil || buf.size == 0 || len(dest) == 0 {
 		return 0, nil
 	}
 
-	n := int(size)
+	n := int(buf.size)
 	if n > len(dest) {
 		n = len(dest)
 	}
-	return copy(dest, unsafe.Slice((*byte)(data), n)), nil
+	return copy(dest, unsafe.Slice((*byte)(buf.data), n)), nil
 }
 
 func (b *Buffer) GetStatus() (int, error) {

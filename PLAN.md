@@ -80,9 +80,13 @@ progress.
 - [x] **`GetDataInto` is not zero-allocation.** Rewritten to a single
       `copy(dest, unsafe.Slice((*byte)(data), n))` straight out of the C
       buffer, plus the nil/zero guards `GetDataSlice` already had. Reaching a true
-      zero required `#cgo noescape/nocallback arv_buffer_get_data`; without it cgo
-      heap-allocates the `size` out-param on every call. Verified by a
-      `testing.AllocsPerRun` assertion in `tests/buffer_data_test.go`. Also fixed
+      zero also required removing the `size` out-param: passing a Go pointer to
+      `arv_buffer_get_data` makes cgo heap-allocate the local on every call. The
+      `arv_go_buffer_get_data` wrapper returns data+size in a struct instead, so
+      no Go pointer crosses the boundary. (`#cgo noescape` works too, but needs a
+      Go 1.23 language version — it broke the CI build on the 1.23 baseline.)
+      Verified by a `testing.AllocsPerRun` assertion in
+      `tests/buffer_data_test.go`. Also fixed
       the same 32/64-bit out-param width bug as P0 in `GetData`, `GetDataUnsafe`,
       `GetDataSlice`, and `GetPartData` (`var size int` → `var size C.size_t`).
 - [x] **Remove unused `fastError`** in `internal.go` (dead code). Removed (also
