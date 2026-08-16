@@ -206,6 +206,14 @@ func firstHardwareDeviceID(tb testing.TB) string {
 	return ""
 }
 
+// pushBack returns a popped buffer to its stream. Every acquisition test goes
+// through it so that no call site can silently drop the buffer.
+func pushBack(tb testing.TB, stream aravis.Stream, buffer aravis.Buffer) {
+	tb.Helper()
+
+	stream.PushBuffer(buffer)
+}
+
 // seededBuffer returns a filled buffer whose bytes follow a deterministic
 // pattern, plus a copy of that pattern for comparison.
 //
