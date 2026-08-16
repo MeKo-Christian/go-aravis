@@ -6,16 +6,20 @@ package aravis
 import "C"
 
 import (
-	"sync"
 	"unsafe"
 )
 
-// Common GenICam feature names pre-allocated as C strings
-// This eliminates repeated C.CString allocations for frequently used features
-var (
-	cStringCache      = make(map[string]*C.char)
-	cStringCacheMutex sync.RWMutex
-)
+// Common GenICam feature names pre-allocated as C strings.
+// This eliminates repeated C.CString allocations for frequently used features.
+//
+// The cache is populated once by init and never written again, so it needs no
+// locking and its size is fixed at len(commonFeatures) — a few hundred bytes
+// that live for the lifetime of the process. It is deliberately never freed:
+// getCachedCString hands out raw *C.char pointers with no refcounting or
+// lifetime tracking, so reclaiming them could not be made safe. Keeping the
+// table immutable is what bounds it; see getCachedCString for how names outside
+// commonFeatures are handled.
+var cStringCache = make(map[string]*C.char, len(commonFeatures))
 
 // Commonly used GenICam feature names
 var commonFeatures = []string{
@@ -53,28 +57,21 @@ func init() {
 	}
 }
 
-// getCachedCString returns a cached C string or creates a new one
-// For high-frequency operations, this eliminates malloc/free overhead
-func getCachedCString(s string) *C.char {
-	cStringCacheMutex.RLock()
+// getCachedCString returns a C string for s, avoiding the malloc/free round
+// trip for the feature names in commonFeatures.
+//
+// The second return value reports whether the caller owns the string and must
+// free it. Only names interned at startup are cached; an arbitrary name — every
+// Device.*FeatureValueFast method forwards its caller's argument here — gets a
+// temporary allocation instead. Caching those permanently would let a process
+// that generates or accepts feature names grow the C heap without bound, and
+// the cache has no eviction path (see the note on cStringCache).
+func getCachedCString(s string) (cstr *C.char, mustFree bool) {
 	if cached, exists := cStringCache[s]; exists {
-		cStringCacheMutex.RUnlock()
-		return cached
-	}
-	cStringCacheMutex.RUnlock()
-
-	// Not in cache, create and cache it
-	cStringCacheMutex.Lock()
-	defer cStringCacheMutex.Unlock()
-
-	// Double-check in case another goroutine added it
-	if cached, exists := cStringCache[s]; exists {
-		return cached
+		return cached, false
 	}
 
-	cached := C.CString(s)
-	cStringCache[s] = cached
-	return cached
+	return C.CString(s), true
 }
 
 // Fast versions of common camera operations using cached strings
@@ -82,7 +79,11 @@ func getCachedCString(s string) *C.char {
 
 func (c *Camera) GetWidthFast() (int, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_camera_get_integer(c.camera, getCachedCString("Width"), &gerror)
+	cfeature, mustFree := getCachedCString("Width")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0, err
@@ -92,7 +93,11 @@ func (c *Camera) GetWidthFast() (int, error) {
 
 func (c *Camera) GetHeightFast() (int, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_camera_get_integer(c.camera, getCachedCString("Height"), &gerror)
+	cfeature, mustFree := getCachedCString("Height")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_camera_get_integer(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0, err
@@ -103,7 +108,11 @@ func (c *Camera) GetHeightFast() (int, error) {
 func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
 	var gerror *C.GError
 	var err error
-	C.arv_camera_set_float(c.camera, getCachedCString("ExposureTime"), C.double(exposureTimeUs), &gerror)
+	cfeature, mustFree := getCachedCString("ExposureTime")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	C.arv_camera_set_float(c.camera, cfeature, C.double(exposureTimeUs), &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
@@ -112,7 +121,11 @@ func (c *Camera) SetExposureTimeFast(exposureTimeUs float64) error {
 
 func (c *Camera) GetExposureTimeFast() (float64, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_camera_get_float(c.camera, getCachedCString("ExposureTime"), &gerror)
+	cfeature, mustFree := getCachedCString("ExposureTime")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_camera_get_float(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0.0, err
@@ -123,7 +136,11 @@ func (c *Camera) GetExposureTimeFast() (float64, error) {
 func (c *Camera) SetGainFast(gain float64) error {
 	var gerror *C.GError
 	var err error
-	C.arv_camera_set_float(c.camera, getCachedCString("Gain"), C.double(gain), &gerror)
+	cfeature, mustFree := getCachedCString("Gain")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	C.arv_camera_set_float(c.camera, cfeature, C.double(gain), &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
@@ -132,7 +149,11 @@ func (c *Camera) SetGainFast(gain float64) error {
 
 func (c *Camera) GetGainFast() (float64, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_camera_get_float(c.camera, getCachedCString("Gain"), &gerror)
+	cfeature, mustFree := getCachedCString("Gain")
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_camera_get_float(c.camera, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0.0, err
@@ -143,7 +164,11 @@ func (c *Camera) GetGainFast() (float64, error) {
 // Fast device feature access using cached strings
 func (d *Device) GetStringFeatureValueFast(feature string) (string, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_device_get_string_feature_value(d.device, getCachedCString(feature), &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_device_get_string_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return "", err
@@ -159,7 +184,11 @@ func (d *Device) SetStringFeatureValueFast(feature, value string) error {
 	cvalue := C.CString(value)
 	defer C.free(unsafe.Pointer(cvalue))
 
-	C.arv_device_set_string_feature_value(d.device, getCachedCString(feature), cvalue, &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	C.arv_device_set_string_feature_value(d.device, cfeature, cvalue, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
@@ -168,7 +197,11 @@ func (d *Device) SetStringFeatureValueFast(feature, value string) error {
 
 func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_device_get_integer_feature_value(d.device, getCachedCString(feature), &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_device_get_integer_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0, err
@@ -179,7 +212,11 @@ func (d *Device) GetIntegerFeatureValueFast(feature string) (int64, error) {
 func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
 	var gerror *C.GError
 	var err error
-	C.arv_device_set_integer_feature_value(d.device, getCachedCString(feature), C.long(value), &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	C.arv_device_set_integer_feature_value(d.device, cfeature, C.long(value), &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
@@ -188,7 +225,11 @@ func (d *Device) SetIntegerFeatureValueFast(feature string, value int64) error {
 
 func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 	var gerror *C.GError
-	cvalue, err := C.arv_device_get_float_feature_value(d.device, getCachedCString(feature), &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	cvalue, err := C.arv_device_get_float_feature_value(d.device, cfeature, &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 		return 0.0, err
@@ -199,21 +240,13 @@ func (d *Device) GetFloatFeatureValueFast(feature string) (float64, error) {
 func (d *Device) SetFloatFeatureValueFast(feature string, value float64) error {
 	var gerror *C.GError
 	var err error
-	C.arv_device_set_float_feature_value(d.device, getCachedCString(feature), C.double(value), &gerror)
+	cfeature, mustFree := getCachedCString(feature)
+	if mustFree {
+		defer C.free(unsafe.Pointer(cfeature))
+	}
+	C.arv_device_set_float_feature_value(d.device, cfeature, C.double(value), &gerror)
 	if unsafe.Pointer(gerror) != nil {
 		err = errorFromGError(gerror)
 	}
 	return err
-}
-
-// Cleanup function for graceful shutdown (optional)
-// Call this before program exit to free cached C strings
-func CleanupPerformanceCache() {
-	cStringCacheMutex.Lock()
-	defer cStringCacheMutex.Unlock()
-
-	for _, cstr := range cStringCache {
-		C.free(unsafe.Pointer(cstr))
-	}
-	cStringCache = make(map[string]*C.char)
 }

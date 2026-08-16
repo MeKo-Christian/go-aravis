@@ -116,18 +116,6 @@ func TestBufferOperationsWithoutCamera(t *testing.T) {
 	}
 }
 
-// TestPerformanceCacheOperations tests performance optimization functions.
-func TestPerformanceCacheOperations(t *testing.T) {
-	// Test cleanup function (should be safe to call)
-	aravis.CleanupPerformanceCache()
-	t.Log("CleanupPerformanceCache() completed successfully")
-
-	// Call it multiple times to ensure it's safe
-	aravis.CleanupPerformanceCache()
-	aravis.CleanupPerformanceCache()
-	t.Log("Multiple CleanupPerformanceCache() calls completed successfully")
-}
-
 // TestInterfaceOperations tests interface control operations.
 func TestInterfaceOperations(t *testing.T) {
 	// Test enable/disable with various inputs

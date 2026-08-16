@@ -37,7 +37,10 @@ gain, err := camera.GetGainFast()
 ### Performance Impact
 
 - **20-40% faster** for parameter access operations
-- **Zero memory allocations** for common GenICam features
+- **Zero memory allocations** for the common GenICam features interned at
+  startup. A feature name outside that set falls back to a temporary C string
+  per call, so the cache cannot grow without bound when names are generated at
+  runtime or come from user input
 - Particularly beneficial in streaming loops that adjust parameters
 
 ## Zero-Copy Buffer Access
@@ -78,13 +81,13 @@ for {
     if err != nil {
         continue
     }
-    
+
     // Copy into pre-allocated buffer
     bytesRead, err := buffer.GetDataInto(dataBuffer)
     if err == nil {
         // Process dataBuffer[:bytesRead]
     }
-    
+
     stream.PushBuffer(buffer)
 }
 ```
@@ -110,9 +113,11 @@ if err != nil {
 
 ### Features
 
-- **Pre-allocated common errors** - No string allocations for frequent errors
+- **Stable messages for known error codes** - Common Aravis device errors use a
+  fixed message table instead of converting the GLib string
 - **Error code access** - Structured error information
-- **Error pooling** - Reduced allocations for uncommon errors
+- **Caller-owned errors** - Every error is freshly allocated, so callers can
+  never mutate shared state
 
 ### Usage
 
@@ -185,30 +190,30 @@ for {
     if err != nil {
         continue // Handle timeouts gracefully
     }
-    
+
     // Check buffer status efficiently
     status, err := buffer.GetStatus()
     if err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
         stream.PushBuffer(buffer)
         continue
     }
-    
+
     // High-performance data access options:
-    
+
     // Option 1: Zero-copy (fastest, use with care)
     dataSlice, err := buffer.GetDataSlice()
     if err == nil {
         // Process dataSlice immediately
         processImageData(dataSlice)
     }
-    
+
     // Option 2: Pre-allocated copy (fast and safe)
     bytesRead, err := buffer.GetDataInto(dataBuffer)
     if err == nil {
         // Process dataBuffer[:bytesRead]
         processImageData(dataBuffer[:bytesRead])
     }
-    
+
     // Return buffer for reuse
     stream.PushBuffer(buffer)
 }
@@ -218,20 +223,20 @@ for {
 
 Based on testing with typical GigE Vision cameras:
 
-| Operation | Standard Method | Optimized Method | Improvement |
-|-----------|----------------|------------------|-------------|
-| Parameter Access | 100 μs | 60 μs | 40% faster |
-| Buffer Data Copy | 2.5 ms | 0.5 ms | 80% faster |
-| Zero-Copy Access | 2.5 ms | 0.05 ms | 50x faster |
-| Streaming (30 FPS) | 85% CPU | 45% CPU | 47% less CPU |
+| Operation          | Standard Method | Optimized Method | Improvement  |
+| ------------------ | --------------- | ---------------- | ------------ |
+| Parameter Access   | 100 μs          | 60 μs            | 40% faster   |
+| Buffer Data Copy   | 2.5 ms          | 0.5 ms           | 80% faster   |
+| Zero-Copy Access   | 2.5 ms          | 0.05 ms          | 50x faster   |
+| Streaming (30 FPS) | 85% CPU         | 45% CPU          | 47% less CPU |
 
 ## Memory Usage
 
-| Operation | Standard Method | Optimized Method | Memory Saved |
-|-----------|----------------|------------------|--------------|
-| 100 param reads | 5.2 KB | 0 KB | 100% |
-| 1000 frame copies | 3.2 GB | 0 KB | 100% |
-| Error handling | 12 KB/sec | 2 KB/sec | 83% |
+| Operation         | Standard Method | Optimized Method | Memory Saved |
+| ----------------- | --------------- | ---------------- | ------------ |
+| 100 param reads   | 5.2 KB          | 0 KB             | 100%         |
+| 1000 frame copies | 3.2 GB          | 0 KB             | 100%         |
+| Error handling    | 12 KB/sec       | 2 KB/sec         | 83%          |
 
 ## Best Practices
 
@@ -254,17 +259,7 @@ Based on testing with typical GigE Vision cameras:
 
 All performance optimizations maintain the same thread safety characteristics as the original methods:
 
-- String caching is thread-safe with read-write mutexes
+- The string cache is filled once at startup and never written again, so reads
+  need no locking
 - Buffer operations require external synchronization as before
 - Error handling optimizations are thread-safe
-
-## Cleanup
-
-For long-running applications, you can optionally clean up cached strings:
-
-```go
-// Optional cleanup before program exit
-aravis.CleanupPerformanceCache()
-```
-
-This is not required as cached strings are small and static, but can be useful in memory-constrained environments.
