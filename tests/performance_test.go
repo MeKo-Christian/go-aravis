@@ -81,26 +81,31 @@ func benchFloat(b *testing.B, name string, standard, fast func() (float64, error
 }
 
 // probeBuffer checks every buffer accessor once, outside any timed region, so
-// that a broken one fails the benchmark instead of being timed on its error
+// that a broken one fails the benchmark instead of being timed on its failure
 // path — which would report an encouragingly small number for a call that does
 // nothing.
+//
+// None of the four returns an error any more, so the probe asserts the payload
+// size instead. That is what a timing run needs to be able to trust: an
+// accessor handing back nothing is exactly the case that would benchmark fast
+// and mean nothing. dest is sized to the full payload by every caller.
 func probeBuffer(b *testing.B, buffer aravis.Buffer, dest []byte) {
 	b.Helper()
 
-	if _, err := buffer.GetData(); err != nil {
-		b.Fatalf("GetData() returned error: %v", err)
+	if n := len(buffer.GetData()); n != len(dest) {
+		b.Fatalf("GetData() returned %d bytes, want the full payload of %d", n, len(dest))
 	}
 
-	if _, err := buffer.GetDataSlice(); err != nil {
-		b.Fatalf("GetDataSlice() returned error: %v", err)
+	if n := len(buffer.GetDataSlice()); n != len(dest) {
+		b.Fatalf("GetDataSlice() returned %d bytes, want the full payload of %d", n, len(dest))
 	}
 
-	if _, err := buffer.GetDataInto(dest); err != nil {
-		b.Fatalf("GetDataInto() returned error: %v", err)
+	if n := buffer.GetDataInto(dest); n != len(dest) {
+		b.Fatalf("GetDataInto() copied %d bytes, want the full payload of %d", n, len(dest))
 	}
 
-	if _, _, err := buffer.GetDataUnsafe(); err != nil {
-		b.Fatalf("GetDataUnsafe() returned error: %v", err)
+	if _, n := buffer.GetDataUnsafe(); n != len(dest) {
+		b.Fatalf("GetDataUnsafe() reported %d bytes, want the full payload of %d", n, len(dest))
 	}
 }
 
@@ -161,7 +166,7 @@ func BenchmarkBufferDataAccess(b *testing.B) {
 		b.ReportAllocs()
 
 		for range b.N {
-			_, _ = buffer.GetData()
+			_ = buffer.GetData()
 		}
 	})
 
@@ -170,7 +175,7 @@ func BenchmarkBufferDataAccess(b *testing.B) {
 		b.ReportAllocs()
 
 		for range b.N {
-			_, _ = buffer.GetDataSlice()
+			_ = buffer.GetDataSlice()
 		}
 	})
 
@@ -179,7 +184,7 @@ func BenchmarkBufferDataAccess(b *testing.B) {
 		b.ReportAllocs()
 
 		for range b.N {
-			_, _ = buffer.GetDataInto(destBuffer)
+			_ = buffer.GetDataInto(destBuffer)
 		}
 	})
 
@@ -188,7 +193,7 @@ func BenchmarkBufferDataAccess(b *testing.B) {
 		b.ReportAllocs()
 
 		for range b.N {
-			_, _, _ = buffer.GetDataUnsafe()
+			_, _ = buffer.GetDataUnsafe()
 		}
 	})
 }
@@ -219,7 +224,7 @@ func BenchmarkCombinedOperations(b *testing.B) {
 			_, _ = camera.GetWidth()
 			_, _ = camera.GetHeight()
 			_, _ = camera.GetExposureTime()
-			_, _ = buffer.GetData()
+			_ = buffer.GetData()
 		}
 	})
 
@@ -231,7 +236,7 @@ func BenchmarkCombinedOperations(b *testing.B) {
 			_, _ = camera.GetWidthFast()
 			_, _ = camera.GetHeightFast()
 			_, _ = camera.GetExposureTime()
-			_, _ = buffer.GetDataInto(destBuffer)
+			_ = buffer.GetDataInto(destBuffer)
 		}
 	})
 
@@ -243,7 +248,7 @@ func BenchmarkCombinedOperations(b *testing.B) {
 			_, _ = camera.GetWidthFast()
 			_, _ = camera.GetHeightFast()
 			_, _ = camera.GetExposureTime()
-			_, _ = buffer.GetDataSlice()
+			_ = buffer.GetDataSlice()
 		}
 	})
 }
@@ -268,7 +273,7 @@ func BenchmarkMemoryAllocations(b *testing.B) {
 
 		for range b.N {
 			_, _ = camera.GetWidth()
-			_, _ = buffer.GetData()
+			_ = buffer.GetData()
 		}
 	})
 
@@ -277,7 +282,7 @@ func BenchmarkMemoryAllocations(b *testing.B) {
 
 		for range b.N {
 			_, _ = camera.GetWidthFast()
-			_, _ = buffer.GetDataInto(destBuffer)
+			_ = buffer.GetDataInto(destBuffer)
 		}
 	})
 
@@ -286,7 +291,7 @@ func BenchmarkMemoryAllocations(b *testing.B) {
 
 		for range b.N {
 			_, _ = camera.GetWidthFast()
-			_, _ = buffer.GetDataSlice()
+			_ = buffer.GetDataSlice()
 		}
 	})
 }

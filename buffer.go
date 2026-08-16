@@ -179,12 +179,15 @@ func NewBuffer(size uint) (Buffer, error) {
 // Check GetStatus first: GetData returns whatever bytes are in the buffer even
 // when acquisition failed.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure.
-func (b *Buffer) GetData() ([]byte, error) {
+// A buffer holding no ArvBuffer (see IsNil) yields a nil slice.
+func (b *Buffer) GetData() []byte {
+	if b.buffer == nil {
+		return nil
+	}
+
 	buf := C.arv_go_buffer_get_data(b.buffer)
 
-	return C.GoBytes(buf.data, C.int(buf.size)), nil
+	return C.GoBytes(buf.data, C.int(buf.size))
 }
 
 // GetDataUnsafe returns a pointer into the C payload memory together with its
@@ -200,12 +203,16 @@ func (b *Buffer) GetData() ([]byte, error) {
 // Prefer GetDataSlice for a typed view of the same memory, or GetDataInto if
 // you want an allocation-free copy you can keep.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure.
-func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
+// A buffer holding no ArvBuffer (see IsNil) yields a nil pointer and a length
+// of zero.
+func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int) {
+	if b.buffer == nil {
+		return nil, 0
+	}
+
 	buf := C.arv_go_buffer_get_data(b.buffer)
 
-	return buf.data, int(buf.size), nil
+	return buf.data, int(buf.size)
 }
 
 // GetDataSlice returns a []byte that aliases the C payload memory directly.
@@ -225,18 +232,22 @@ func (b *Buffer) GetDataUnsafe() (unsafe.Pointer, int, error) {
 // Use GetData for a self-contained copy, or GetDataInto to copy without
 // allocating.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure.
-func (b *Buffer) GetDataSlice() ([]byte, error) {
+// A buffer holding no ArvBuffer (see IsNil) yields a nil slice, as does an
+// empty payload.
+func (b *Buffer) GetDataSlice() []byte {
+	if b.buffer == nil {
+		return nil
+	}
+
 	buf := C.arv_go_buffer_get_data(b.buffer)
 
 	if buf.data == nil || buf.size == 0 {
-		return nil, nil
+		return nil
 	}
 
 	// unsafe.Slice aliases the C buffer memory directly (zero-copy). The
 	// returned slice is only valid until the buffer is freed or reused.
-	return unsafe.Slice((*byte)(buf.data), int(buf.size)), nil
+	return unsafe.Slice((*byte)(buf.data), int(buf.size))
 }
 
 // GetDataInto copies the buffer payload into the caller-supplied dest and
@@ -252,19 +263,23 @@ func (b *Buffer) GetDataSlice() ([]byte, error) {
 // bytes live in dest, so they remain valid after the buffer is pushed back to
 // the stream; unlike GetData no new slice is allocated per frame.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure.
-func (b *Buffer) GetDataInto(dest []byte) (int, error) {
+// A buffer holding no ArvBuffer (see IsNil) copies nothing and returns 0.
+func (b *Buffer) GetDataInto(dest []byte) int {
+	if b.buffer == nil {
+		return 0
+	}
+
 	buf := C.arv_go_buffer_get_data(b.buffer)
 	if buf.data == nil || buf.size == 0 || len(dest) == 0 {
-		return 0, nil
+		return 0
 	}
 
 	n := int(buf.size)
 	if n > len(dest) {
 		n = len(dest)
 	}
-	return copy(dest, unsafe.Slice((*byte)(buf.data), n)), nil
+
+	return copy(dest, unsafe.Slice((*byte)(buf.data), n))
 }
 
 // GetStatus returns the acquisition status of the buffer, one of the
@@ -277,10 +292,14 @@ func (b *Buffer) GetDataInto(dest []byte) (int, error) {
 // BUFFER_STATUS_TIMEOUT are the common ones in practice) indicates a frame
 // that should be discarded rather than decoded.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure. The acquisition outcome is the status value itself.
-func (b *Buffer) GetStatus() (int, error) {
-	return int(C.arv_buffer_get_status(b.buffer)), nil
+// There is no error return: the acquisition outcome is the status value itself.
+// A buffer holding no ArvBuffer (see IsNil) reports BUFFER_STATUS_UNKNOWN.
+func (b *Buffer) GetStatus() int {
+	if b.buffer == nil {
+		return BUFFER_STATUS_UNKNOWN
+	}
+
+	return int(C.arv_buffer_get_status(b.buffer))
 }
 
 // IsNil reports whether the buffer holds no underlying ArvBuffer. This is true
@@ -298,10 +317,14 @@ func (b *Buffer) IsNil() bool {
 // Valid part indices for the other Get Part accessors are 0 to the returned
 // count minus one.
 //
-// The returned error is always nil; the underlying Aravis call cannot report a
-// failure.
-func (b *Buffer) GetNumParts() (int, error) {
-	return int(C.arv_buffer_get_n_parts(b.buffer)), nil
+// A buffer holding no ArvBuffer (see IsNil) reports 0 parts, so the range is
+// empty and every part accessor on it reports ErrNilBuffer.
+func (b *Buffer) GetNumParts() int {
+	if b.buffer == nil {
+		return 0
+	}
+
+	return int(C.arv_buffer_get_n_parts(b.buffer))
 }
 
 // checkPart reports whether partIndex may be handed to Aravis. The part
@@ -313,7 +336,7 @@ func (b *Buffer) checkPart(partIndex int) error {
 		return ErrNilBuffer
 	}
 
-	numParts := int(C.arv_buffer_get_n_parts(b.buffer))
+	numParts := b.GetNumParts()
 	if partIndex < 0 || partIndex >= numParts {
 		return fmt.Errorf("%w: part %d of %d", ErrPartOutOfRange, partIndex, numParts)
 	}
@@ -464,11 +487,15 @@ func (b *Buffer) GetPartPixelFormat(partIndex int) (uint, error) {
 // to locate, say, the disparity or confidence part of a multipart payload
 // without scanning GetPartComponentId over every part.
 //
-// The returned error is always nil; a missing component is reported through the
-// -1 index, not through an error.
-func (b *Buffer) FindComponent(componentId uint) (int, error) {
-	partIndex := C.arv_buffer_find_component(b.buffer, C.guint(componentId))
-	return int(partIndex), nil
+// There is no error return: a missing component is reported through the -1
+// index. A buffer holding no ArvBuffer (see IsNil) has no components either and
+// likewise yields -1.
+func (b *Buffer) FindComponent(componentId uint) int {
+	if b.buffer == nil {
+		return -1
+	}
+
+	return int(C.arv_buffer_find_component(b.buffer, C.guint(componentId)))
 }
 
 // HasChunks reports whether the buffer's payload type carries GenICam chunk
@@ -476,10 +503,14 @@ func (b *Buffer) FindComponent(componentId uint) (int, error) {
 // by the camera. It wraps arv_buffer_has_chunks.
 //
 // It only tells you that chunks are present, not what they contain; this
-// binding exposes no accessor for the individual chunks yet.
+// binding exposes no accessor for the individual chunks yet. A buffer holding
+// no ArvBuffer (see IsNil) carries no chunks.
 func (b *Buffer) HasChunks() bool {
-	hasChunks := C.arv_buffer_has_chunks(b.buffer)
-	return hasChunks != 0
+	if b.buffer == nil {
+		return false
+	}
+
+	return C.arv_buffer_has_chunks(b.buffer) != 0
 }
 
 // GetPartWidth returns the width in pixels of the part at partIndex, wrapping

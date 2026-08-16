@@ -3,11 +3,17 @@ package tests
 // Contract tests for the P6 error rule: only a GError may decide that an Aravis
 // call failed.
 //
-// Every accessor below wraps a C function with no GError out-parameter at all,
-// or one whose GError it already binds correctly. None of them can fail, so
-// their error return must be nil — which is exactly what their documentation now
-// promises. Each used to bind cgo's two-result form instead, whose second value
-// is errno and not a failure report.
+// Every accessor below wraps a C function whose GError it binds correctly, or
+// none at all. None of them can fail here, so their error return must be nil.
+// Each used to bind cgo's two-result form instead, whose second value is errno
+// and not a failure report.
+//
+// The table is shorter than the set the errno fix touched. Ten of those
+// accessors have since dropped their error return altogether — the four
+// package-level id and count functions in interface.go, and Buffer.GetData,
+// GetDataUnsafe, GetDataSlice, GetDataInto, GetStatus and GetNumParts. There is
+// no longer an error to assert about, which is a stronger guarantee than this
+// test could give: the compiler enforces it at every call site instead.
 //
 // What this file does *not* do is reproduce the defect. errno is only set by
 // syscalls, and the Fake backend performs none: the whole point of it is that
@@ -40,20 +46,12 @@ func TestAccessorsWithoutErrorChannelReturnNilError(t *testing.T) {
 		t.Fatalf("NewBuffer(1024) returned error: %v", err)
 	}
 
-	dest := make([]byte, 1024)
-
 	tests := []struct {
 		name string
 		call func() error
 	}{
-		// interface.go — none of the four C functions takes a GError.
-		{"GetNumInterface", func() error { _, err := aravis.GetNumInterface(); return err }},
-		{"GetInterfaceId", func() error { _, err := aravis.GetInterfaceId(0); return err }},
-		{"GetNumDevices", func() error { _, err := aravis.GetNumDevices(); return err }},
-		{"GetDeviceId", func() error { _, err := aravis.GetDeviceId(0); return err }},
-
-		// buffer.go — likewise, and NewBuffer must no longer drop a buffer it
-		// successfully allocated.
+		// buffer.go — arv_buffer_new takes no GError, and NewBuffer must no
+		// longer drop a buffer it successfully allocated.
 		{"NewBuffer", func() error {
 			b, err := aravis.NewBuffer(1024)
 			if err == nil && b.IsNil() {
@@ -62,12 +60,6 @@ func TestAccessorsWithoutErrorChannelReturnNilError(t *testing.T) {
 
 			return err
 		}},
-		{"GetData", func() error { _, err := buffer.GetData(); return err }},
-		{"GetDataUnsafe", func() error { _, _, err := buffer.GetDataUnsafe(); return err }},
-		{"GetDataSlice", func() error { _, err := buffer.GetDataSlice(); return err }},
-		{"GetDataInto", func() error { _, err := buffer.GetDataInto(dest); return err }},
-		{"GetStatus", func() error { _, err := buffer.GetStatus(); return err }},
-		{"GetNumParts", func() error { _, err := buffer.GetNumParts(); return err }},
 		{"GetPartData", func() error { _, err := buffer.GetPartData(0); return err }},
 
 		// camera.go — these do have a GError, and it stays unset here.

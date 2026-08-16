@@ -68,14 +68,8 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		// whole frame per request on either of the two error paths below.
 		defer buffer.Close()
 
-		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
+		if s := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
 			http.Error(w, fmt.Sprintf("buffer not ready: status %d", s), http.StatusInternalServerError)
-			return
-		}
-
-		data, err := buffer.GetData()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -83,7 +77,7 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 		img := aravis.NewBayerRG(
 			image.Rectangle{image.Point{0, 0}, image.Point{width, height}},
 		)
-		img.Pix = data
+		img.Pix = buffer.GetData()
 
 		// Write JPEG to client
 		jpeg.Encode(w, img, nil)
@@ -96,17 +90,12 @@ func init() {
 }
 
 func main() {
-	var err error
-	var numDevices uint
-
 	flag.Parse()
 
 	// Get devices
 	aravis.UpdateDeviceList()
 
-	if numDevices, err = aravis.GetNumDevices(); err != nil {
-		log.Fatal(err)
-	}
+	numDevices := aravis.GetNumDevices()
 
 	// Must find at least one device
 	if numDevices == 0 {
@@ -115,7 +104,7 @@ func main() {
 	}
 
 	for index := range numDevices {
-		name, _ := aravis.GetDeviceId(index)
+		name := aravis.GetDeviceId(index)
 
 		camera, _ := aravis.NewCamera(name)
 		defer camera.Close()

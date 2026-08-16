@@ -15,32 +15,19 @@ import (
 // test that called it three times and asserted nothing beyond the count being
 // stable.
 func TestDeviceDiscovery(t *testing.T) {
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil {
-		t.Fatalf("GetNumDevices() returned error: %v", err)
-	}
-
+	numDevices := aravis.GetNumDevices()
 	if numDevices != 1 {
 		t.Fatalf("GetNumDevices() = %d, want 1 (the Fake backend produces exactly one device)", numDevices)
 	}
 
-	id, err := aravis.GetDeviceId(0)
-	if err != nil {
-		t.Fatalf("GetDeviceId(0) returned error: %v", err)
-	}
-
+	id := aravis.GetDeviceId(0)
 	if id != fakeDeviceID {
 		t.Errorf("GetDeviceId(0) = %q, want %q", id, fakeDeviceID)
 	}
 
 	aravis.UpdateDeviceList()
 
-	again, err := aravis.GetNumDevices()
-	if err != nil {
-		t.Fatalf("GetNumDevices() after a second UpdateDeviceList returned error: %v", err)
-	}
-
-	if again != numDevices {
+	if again := aravis.GetNumDevices(); again != numDevices {
 		t.Errorf("GetNumDevices() = %d after re-scanning, want %d; discovery must be idempotent", again, numDevices)
 	}
 }
@@ -52,11 +39,7 @@ func TestDeviceDiscovery(t *testing.T) {
 // depends on how it was built, so pinning a number here would fail on a
 // perfectly good build rather than catch a bug.
 func TestInterfaceDiscovery(t *testing.T) {
-	numInterfaces, err := aravis.GetNumInterface()
-	if err != nil {
-		t.Fatalf("GetNumInterface() returned error: %v", err)
-	}
-
+	numInterfaces := aravis.GetNumInterface()
 	if numInterfaces == 0 {
 		t.Fatal("GetNumInterface() = 0, want at least the Fake interface")
 	}
@@ -64,13 +47,7 @@ func TestInterfaceDiscovery(t *testing.T) {
 	foundFake := false
 
 	for i := range numInterfaces {
-		id, err := aravis.GetInterfaceId(i)
-		if err != nil {
-			t.Errorf("GetInterfaceId(%d) returned error: %v", i, err)
-
-			continue
-		}
-
+		id := aravis.GetInterfaceId(i)
 		if id == "" {
 			t.Errorf("GetInterfaceId(%d) returned an empty id", i)
 		}
@@ -89,23 +66,16 @@ func TestInterfaceDiscovery(t *testing.T) {
 // TestOutOfRangeIdsReturnEmptyString covers the accessor boundary. Aravis
 // returns NULL for an index past the end, which C.GoString turns into "".
 //
-// Neither accessor has a GError channel, so ("", nil) is the whole contract and
-// both halves are asserted below.
+// Neither accessor has a GError channel, and neither returns an error any more,
+// so the empty string is the whole contract.
 func TestOutOfRangeIdsReturnEmptyString(t *testing.T) {
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil {
-		t.Fatalf("GetNumDevices() returned error: %v", err)
-	}
-
-	numInterfaces, err := aravis.GetNumInterface()
-	if err != nil {
-		t.Fatalf("GetNumInterface() returned error: %v", err)
-	}
+	numDevices := aravis.GetNumDevices()
+	numInterfaces := aravis.GetNumInterface()
 
 	tests := []struct {
 		name  string
 		index uint
-		get   func(uint) (string, error)
+		get   func(uint) string
 	}{
 		{"device past the end", numDevices + 100, aravis.GetDeviceId},
 		{"device at max uint", ^uint(0), aravis.GetDeviceId},
@@ -115,12 +85,7 @@ func TestOutOfRangeIdsReturnEmptyString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id, err := tt.get(tt.index)
-			if err != nil {
-				t.Errorf("returned error %v; an out-of-range index is not a failure", err)
-			}
-
-			if id != "" {
+			if id := tt.get(tt.index); id != "" {
 				t.Errorf("id = %q, want the empty string", id)
 			}
 		})
@@ -143,14 +108,14 @@ func TestEnableDisableInterfaceChangesDiscovery(t *testing.T) {
 	aravis.DisableInterface(fakeInterface)
 	aravis.UpdateDeviceList()
 
-	if n, _ := aravis.GetNumDevices(); n != 0 {
+	if n := aravis.GetNumDevices(); n != 0 {
 		t.Fatalf("GetNumDevices() = %d after disabling %q, want 0", n, fakeInterface)
 	}
 
 	aravis.EnableInterface(fakeInterface)
 	aravis.UpdateDeviceList()
 
-	if n, _ := aravis.GetNumDevices(); n != 1 {
+	if n := aravis.GetNumDevices(); n != 1 {
 		t.Fatalf("GetNumDevices() = %d after enabling %q, want 1", n, fakeInterface)
 	}
 
@@ -159,7 +124,7 @@ func TestEnableDisableInterfaceChangesDiscovery(t *testing.T) {
 	aravis.EnableInterface("")
 	aravis.UpdateDeviceList()
 
-	if n, _ := aravis.GetNumDevices(); n != 1 {
+	if n := aravis.GetNumDevices(); n != 1 {
 		t.Errorf("GetNumDevices() = %d after enabling/disabling unknown ids, want 1", n)
 	}
 }

@@ -29,10 +29,7 @@ func TestGetDataIntoCopies(t *testing.T) {
 				dest[i] = sentinel
 			}
 
-			n, err := buf.GetDataInto(dest)
-			if err != nil {
-				t.Fatalf("GetDataInto() returned error: %v", err)
-			}
+			n := buf.GetDataInto(dest)
 			if n != tt.wantN {
 				t.Fatalf("GetDataInto() = %d, want %d", n, tt.wantN)
 			}
@@ -68,11 +65,7 @@ func TestGetDataIntoEmptyDest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			n, err := buf.GetDataInto(tt.dest)
-			if err != nil {
-				t.Fatalf("GetDataInto() returned error: %v", err)
-			}
-			if n != 0 {
+			if n := buf.GetDataInto(tt.dest); n != 0 {
 				t.Errorf("GetDataInto() = %d, want 0", n)
 			}
 		})
@@ -87,9 +80,7 @@ func TestGetDataIntoZeroAllocations(t *testing.T) {
 	dest := make([]byte, len(want))
 
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := buf.GetDataInto(dest); err != nil {
-			t.Fatalf("GetDataInto() returned error: %v", err)
-		}
+		buf.GetDataInto(dest)
 	})
 
 	if allocs > 0 {

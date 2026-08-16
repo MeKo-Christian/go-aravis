@@ -86,11 +86,7 @@ func run(m *testing.M) int {
 // selectFakeBackend enables the Fake interface and, unless real hardware was
 // asked for, disables every other one.
 func selectFakeBackend(keepHardware bool) error {
-	n, err := aravis.GetNumInterface()
-	if err != nil {
-		return fmt.Errorf("GetNumInterface: %w", err)
-	}
-
+	n := aravis.GetNumInterface()
 	if n == 0 {
 		return errors.New("aravis reports no interfaces at all")
 	}
@@ -98,11 +94,7 @@ func selectFakeBackend(keepHardware bool) error {
 	found := false
 
 	for i := range n {
-		id, err := aravis.GetInterfaceId(i)
-		if err != nil {
-			return fmt.Errorf("GetInterfaceId(%d): %w", i, err)
-		}
-
+		id := aravis.GetInterfaceId(i)
 		if id == fakeInterface {
 			found = true
 
@@ -184,17 +176,10 @@ func firstHardwareDeviceID(tb testing.TB) string {
 
 	aravis.UpdateDeviceList()
 
-	numDevices, err := aravis.GetNumDevices()
-	if err != nil {
-		tb.Fatalf("GetNumDevices() returned error: %v", err)
-	}
+	numDevices := aravis.GetNumDevices()
 
 	for i := range numDevices {
-		id, err := aravis.GetDeviceId(i)
-		if err != nil {
-			tb.Fatalf("GetDeviceId(%d) returned error: %v", i, err)
-		}
-
+		id := aravis.GetDeviceId(i)
 		if id != fakeDeviceID {
 			return id
 		}
@@ -300,15 +285,11 @@ func seededBuffer(tb testing.TB) (aravis.Buffer, []byte) {
 	// released stream.
 	tb.Cleanup(func() { pushBack(tb, stream, filled) })
 
-	if status, err := filled.GetStatus(); err != nil || status != aravis.BUFFER_STATUS_SUCCESS {
-		tb.Fatalf("GetStatus() = %d, %v; want %d, nil", status, err, aravis.BUFFER_STATUS_SUCCESS)
+	if status := filled.GetStatus(); status != aravis.BUFFER_STATUS_SUCCESS {
+		tb.Fatalf("GetStatus() = %d, want %d", status, aravis.BUFFER_STATUS_SUCCESS)
 	}
 
-	slice, err := filled.GetDataSlice()
-	if err != nil {
-		tb.Fatalf("GetDataSlice() returned error: %v", err)
-	}
-
+	slice := filled.GetDataSlice()
 	if len(slice) != int(payloadSize) {
 		tb.Fatalf("GetDataSlice() returned %d bytes, want the full payload of %d", len(slice), payloadSize)
 	}

@@ -231,14 +231,10 @@ func TestSetControlLostHandlerConcurrent(t *testing.T) {
 // old spelling working: GetNumInferface must simply forward to
 // GetNumInterface.
 func TestGetNumInterfaceMatchesDeprecatedAlias(t *testing.T) {
-	want, wantErr := aravis.GetNumInterface()
-	got, gotErr := aravis.GetNumInferface() //nolint:staticcheck // exercising the deprecated alias on purpose
+	want := aravis.GetNumInterface()
+	got := aravis.GetNumInferface() //nolint:staticcheck // exercising the deprecated alias on purpose
 
 	if got != want {
 		t.Errorf("GetNumInferface() = %d, GetNumInterface() = %d; the alias must forward", got, want)
-	}
-
-	if (gotErr == nil) != (wantErr == nil) {
-		t.Errorf("GetNumInferface() error = %v, GetNumInterface() error = %v; want the same outcome", gotErr, wantErr)
 	}
 }

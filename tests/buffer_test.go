@@ -53,32 +53,86 @@ func TestFreshBufferContract(t *testing.T) {
 				t.Fatalf("NewBuffer(%d) returned a nil buffer", size)
 			}
 
-			if status, err := buf.GetStatus(); err != nil || status != aravis.BUFFER_STATUS_CLEARED {
-				t.Errorf("GetStatus() = %d, %v; want %d (CLEARED), nil",
-					status, err, aravis.BUFFER_STATUS_CLEARED)
+			if status := buf.GetStatus(); status != aravis.BUFFER_STATUS_CLEARED {
+				t.Errorf("GetStatus() = %d, want %d (CLEARED)",
+					status, aravis.BUFFER_STATUS_CLEARED)
 			}
 
-			if data, err := buf.GetData(); err != nil || len(data) != 0 {
-				t.Errorf("GetData() = %d bytes, %v; want 0 bytes, nil", len(data), err)
+			if data := buf.GetData(); len(data) != 0 {
+				t.Errorf("GetData() = %d bytes, want 0", len(data))
 			}
 
-			if slice, err := buf.GetDataSlice(); err != nil || slice != nil {
-				t.Errorf("GetDataSlice() = %v, %v; want nil, nil for an unfilled buffer", slice, err)
+			if slice := buf.GetDataSlice(); slice != nil {
+				t.Errorf("GetDataSlice() = %v, want nil for an unfilled buffer", slice)
 			}
 
 			dest := make([]byte, 16)
-			if n, err := buf.GetDataInto(dest); err != nil || n != 0 {
-				t.Errorf("GetDataInto() = %d, %v; want 0, nil", n, err)
+			if n := buf.GetDataInto(dest); n != 0 {
+				t.Errorf("GetDataInto() = %d, want 0", n)
 			}
 
-			if _, n, err := buf.GetDataUnsafe(); err != nil || n != 0 {
-				t.Errorf("GetDataUnsafe() reported size %d, %v; want 0, nil", n, err)
+			if _, n := buf.GetDataUnsafe(); n != 0 {
+				t.Errorf("GetDataUnsafe() reported size %d, want 0", n)
 			}
 
 			if buf.HasChunks() {
 				t.Error("HasChunks() = true on a fresh buffer; want false")
 			}
 		})
+	}
+}
+
+// TestErrorlessAccessorsHandleNilBuffer covers the eight accessors that report
+// no error at all, on the one receiver that has nothing to read: the zero
+// Buffer.
+//
+// They used to hand the NULL straight to Aravis, where every one of them
+// asserts ARV_IS_BUFFER — a GLib CRITICAL per call, and a zero return the
+// caller could not tell from a real one. Dropping the error return took away
+// the last channel through which that could have been reported, so each now
+// answers from the Go side instead. This is the counterpart of
+// TestPartAccessorsRejectNilBuffer, which covers the accessors that do have an
+// error to return.
+//
+// The CRITICAL half of the claim is enforced by `make test-glib-clean`, not by
+// the assertions below: a guard that was removed would still return zero here
+// while logging a diagnostic.
+func TestErrorlessAccessorsHandleNilBuffer(t *testing.T) {
+	var buf aravis.Buffer
+
+	if data := buf.GetData(); data != nil {
+		t.Errorf("GetData() = %v on a zero Buffer; want nil", data)
+	}
+
+	if ptr, n := buf.GetDataUnsafe(); ptr != nil || n != 0 {
+		t.Errorf("GetDataUnsafe() = %v, %d on a zero Buffer; want nil, 0", ptr, n)
+	}
+
+	if slice := buf.GetDataSlice(); slice != nil {
+		t.Errorf("GetDataSlice() = %v on a zero Buffer; want nil", slice)
+	}
+
+	if n := buf.GetDataInto(make([]byte, 16)); n != 0 {
+		t.Errorf("GetDataInto() = %d on a zero Buffer; want 0", n)
+	}
+
+	if status := buf.GetStatus(); status != aravis.BUFFER_STATUS_UNKNOWN {
+		t.Errorf("GetStatus() = %d on a zero Buffer; want %d (UNKNOWN)",
+			status, aravis.BUFFER_STATUS_UNKNOWN)
+	}
+
+	// Zero parts is what makes the part accessors' ErrPartOutOfRange
+	// unreachable on a zero Buffer: they report ErrNilBuffer first.
+	if n := buf.GetNumParts(); n != 0 {
+		t.Errorf("GetNumParts() = %d on a zero Buffer; want 0", n)
+	}
+
+	if index := buf.FindComponent(0); index != -1 {
+		t.Errorf("FindComponent(0) = %d on a zero Buffer; want -1 (not found)", index)
+	}
+
+	if buf.HasChunks() {
+		t.Error("HasChunks() = true on a zero Buffer; want false")
 	}
 }
 
@@ -91,31 +145,19 @@ func TestFreshBufferContract(t *testing.T) {
 func TestBufferAccessorsAgreeOnSeededData(t *testing.T) {
 	buf, want := seededBuffer(t)
 
-	data, err := buf.GetData()
-	if err != nil {
-		t.Fatalf("GetData() returned error: %v", err)
-	}
-
+	data := buf.GetData()
 	if !bytes.Equal(data, want) {
 		t.Errorf("GetData() returned %d bytes that differ from the seeded payload of %d", len(data), len(want))
 	}
 
-	slice, err := buf.GetDataSlice()
-	if err != nil {
-		t.Fatalf("GetDataSlice() returned error: %v", err)
-	}
-
+	slice := buf.GetDataSlice()
 	if !bytes.Equal(slice, want) {
 		t.Errorf("GetDataSlice() returned %d bytes that differ from the seeded payload of %d", len(slice), len(want))
 	}
 
 	dest := make([]byte, len(want))
 
-	n, err := buf.GetDataInto(dest)
-	if err != nil {
-		t.Fatalf("GetDataInto() returned error: %v", err)
-	}
-
+	n := buf.GetDataInto(dest)
 	if n != len(want) {
 		t.Errorf("GetDataInto() = %d, want %d", n, len(want))
 	}
@@ -124,11 +166,7 @@ func TestBufferAccessorsAgreeOnSeededData(t *testing.T) {
 		t.Error("GetDataInto() wrote bytes that differ from the seeded payload")
 	}
 
-	ptr, size, err := buf.GetDataUnsafe()
-	if err != nil {
-		t.Fatalf("GetDataUnsafe() returned error: %v", err)
-	}
-
+	ptr, size := buf.GetDataUnsafe()
 	if ptr == unsafe.Pointer(nil) {
 		t.Fatal("GetDataUnsafe() returned a nil pointer for a filled buffer")
 	}
@@ -155,10 +193,7 @@ func TestBufferAccessorsAgreeOnSeededData(t *testing.T) {
 func TestBufferPartsOnSeededData(t *testing.T) {
 	buf, want := seededBuffer(t)
 
-	numParts, err := buf.GetNumParts()
-	if err != nil {
-		t.Fatalf("GetNumParts() returned error: %v", err)
-	}
+	numParts := buf.GetNumParts()
 
 	// The Fake camera sends a single-component Mono8 image.
 	if numParts != 1 {
