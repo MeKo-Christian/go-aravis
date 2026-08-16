@@ -157,8 +157,8 @@ jobs:
         path: bin/
         retention-days: 7
 
-  integration-test:
-    name: Integration Test (Mock)
+  fake-backend-test:
+    name: Fake Backend Test
     runs-on: ubuntu-latest
 
     steps:
@@ -182,15 +182,37 @@ jobs:
           pkg-config \
           build-essential
 
-    - name: Run integration tests (without cameras)
-      run: |
-        # Integration tests skip gracefully when no cameras are present.
-        make test-short
+    - name: Run short tests
+      run: make test-short
 
     - name: Run performance benchmarks
+      # The benchmarks run against Aravis's Fake backend, so a failure here is
+      # a real failure, not "no camera attached". The `|| echo` that used to
+      # follow this line hid every one of them. BENCHTIME=10x executes every
+      # benchmark body in a few seconds; the timings from a shared runner are
+      # not the point.
+      run: make benchmark BENCHTIME=10x
+
+    - name: Fail on unexpected skips
+      # A skip means the Fake backend was not reachable, which is exactly the
+      # order-dependent silence P5 removed. Three skips are documented and
+      # allowed, all of them properties of the Fake backend rather than of this
+      # binding:
+      #
+      #   TestMultipleDevices          Fake provides exactly one device
+      #   *FirstAvailable              Fake has no first-device (NULL) lookup
+      #   TestFastAccessorsMatchStandard/{ExposureTime,Gain}
+      #                                Fake exposes no such GenICam node
+      #
+      # -v is load-bearing: without it `go test` prints no SKIP lines at all
+      # and this guard would silently pass no matter what.
       run: |
-        # Benchmarks skip gracefully when no cameras are present.
-        make benchmark || echo "Benchmarks completed without cameras"
+        go test -v ./... 2>&1 | tee test-output.txt
+        if grep -E '^\s*--- SKIP' test-output.txt \
+             | grep -vE 'TestMultipleDevices|FirstAvailable|TestFastAccessorsMatchStandard/'; then
+          echo "::error::unexpected test skip; the Fake backend may be unavailable"
+          exit 1
+        fi
 
   docker-test:
     name: Docker Test
