@@ -15,6 +15,8 @@ Entries below cover changes made in this fork. Upstream history is in the git lo
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
 ### Added
 
 - `Camera.NewUSBBuffer(size)` allocates a buffer in memory mapped from the camera's
