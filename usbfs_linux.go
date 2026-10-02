@@ -161,9 +161,11 @@ func (l usbfsLocator) serialOf(fd int) string {
 		return ""
 	}
 
+	// The sysfs root and two numbers from fstat: nothing from outside the
+	// process reaches this path.
 	node := filepath.Join(l.charDir, fmt.Sprintf("%d:%d", major, minor), "serial")
 
-	raw, err := os.ReadFile(node)
+	raw, err := os.ReadFile(filepath.Clean(node))
 	if err != nil {
 		return ""
 	}
