@@ -163,7 +163,7 @@
 //
 // The set is [ErrTimeout], [ErrNoBuffer], [ErrNegativeTimeout], [ErrNilStream],
 // [ErrStreamClosed], [ErrNilBuffer], [ErrBufferNotOwned], [ErrBufferAllocation],
-// [ErrPartOutOfRange] and [ErrPartNotImage]. Some are wrapped with the offending
+// [ErrPartOutOfRange], [ErrPartNotImage] and [ErrUSBBufferUnavailable]. Some are wrapped with the offending
 // value before being returned, which is why errors.Is is the right test rather than
 // an == comparison.
 //

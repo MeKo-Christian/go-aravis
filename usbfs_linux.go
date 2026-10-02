@@ -87,9 +87,18 @@ func (l usbfsLocator) usbfsFD(serial string) (int, error) {
 		}
 
 		dup, err := l.dup(fd)
-		if err != nil {
+		if errors.Is(err, syscall.EBADF) {
 			// Closed between the listing and now: not ours to worry about.
 			continue
+		}
+		if err != nil {
+			// EMFILE and the like: the search cannot finish, which is not
+			// the same as the camera having no device file.
+			if found >= 0 {
+				_ = l.close(found)
+			}
+
+			return -1, fmt.Errorf("duplicate descriptor %d: %w", fd, err)
 		}
 
 		ours[dup] = true
@@ -175,15 +184,18 @@ func (l usbfsLocator) serialOf(fd int) string {
 
 // dupCloseOnExec duplicates fd with close-on-exec set, so a child process
 // started while the duplicate is open does not inherit the camera.
+//
+// It is one fcntl(F_DUPFD_CLOEXEC), not dup followed by setting the flag: a
+// goroutine that forks in between would hand the child Aravis's usbfs file,
+// keeping the camera and its interface claims alive after this process lets
+// go of them.
 func dupCloseOnExec(fd int) (int, error) {
-	dup, err := syscall.Dup(fd)
-	if err != nil {
-		return -1, err
+	dup, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_DUPFD_CLOEXEC, 0)
+	if errno != 0 {
+		return -1, errno
 	}
 
-	syscall.CloseOnExec(dup)
-
-	return dup, nil
+	return int(dup), nil
 }
 
 // charDeviceNumber reports the device number of the character device fd
