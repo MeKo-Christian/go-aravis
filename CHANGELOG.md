@@ -15,6 +15,23 @@ Entries below cover changes made in this fork. Upstream history is in the git lo
 
 ## [Unreleased]
 
+### Added
+
+- `Camera.NewUSBBuffer(size)` allocates a buffer in memory mapped from the camera's
+  usbfs device file, so the USB host controller writes each frame straight into it. A
+  `NewBuffer` payload is ordinary memory, for which the kernel receives every USB
+  transfer into a buffer of its own, allocated and zeroed per transfer, and then copies
+  it over. On a Basler acA1920-40uc streaming BayerRG8 at 25 fps, that took the
+  acquisition's kernel time from 0.72 s to 0.18 s per 15 s, and its CPU from 0.055 to
+  0.020 cores, with identical frames.
+  - It is what `libusb_dev_mem_alloc` does, and what Aravis does natively only from the
+    0.9 development series on. Aravis 0.8 keeps its libusb handle private, so the device
+    file is found among the process's open descriptors by the camera's serial number.
+  - Linux and USB3 Vision only. Elsewhere, and whenever the device file cannot be
+    identified or the kernel refuses the mapping (the `usbcore.usbfs_memory_mb` budget),
+    it returns an error wrapping the new `ErrUSBBufferUnavailable`, and `NewBuffer` is
+    the fallback.
+
 ## [0.2.0] - 2026-08-16
 
 Changes since the last upstream commit. A quality review of the source, tests, docs,
