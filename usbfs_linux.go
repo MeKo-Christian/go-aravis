@@ -70,21 +70,19 @@ func (l usbfsLocator) usbfsFD(serial string) (int, error) {
 		return -1, errors.New("camera reports no serial number to match its usbfs device file by")
 	}
 
-	entries, err := os.ReadDir(l.fdDir)
+	candidates, err := l.usbfsCandidates()
 	if err != nil {
-		return -1, fmt.Errorf("list open descriptors: %w", err)
+		return -1, err
 	}
 
 	found, matches := -1, 0
+	// The duplicates made here. A candidate number that turns up among them was
+	// closed by someone else after the listing and reused by one of ours, and
+	// would count the same device twice.
+	ours := map[int]bool{}
 
-	for _, entry := range entries {
-		fd, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		target, err := os.Readlink(filepath.Join(l.fdDir, entry.Name()))
-		if err != nil || !strings.HasPrefix(target, usbfsPrefix) {
+	for _, fd := range candidates {
+		if ours[fd] {
 			continue
 		}
 
@@ -93,6 +91,8 @@ func (l usbfsLocator) usbfsFD(serial string) (int, error) {
 			// Closed between the listing and now: not ours to worry about.
 			continue
 		}
+
+		ours[dup] = true
 
 		if l.serialOf(dup) != serial {
 			_ = l.close(dup)
@@ -117,6 +117,40 @@ func (l usbfsLocator) usbfsFD(serial string) (int, error) {
 	}
 
 	return found, nil
+}
+
+// usbfsCandidates lists the process's descriptors that refer to a usbfs
+// device file.
+//
+// Every link is read before anything is duplicated. A duplicate takes the
+// lowest free number, which can be one the listing still holds - the
+// directory's own descriptor, which ReadDir has closed by then - and reading
+// that link afterwards would find the camera again, through the scan's own
+// duplicate. On terminal2210004 the camera was descriptor 27, the listing's 43,
+// and the first duplicate became 43.
+func (l usbfsLocator) usbfsCandidates() ([]int, error) {
+	entries, err := os.ReadDir(l.fdDir)
+	if err != nil {
+		return nil, fmt.Errorf("list open descriptors: %w", err)
+	}
+
+	var candidates []int
+
+	for _, entry := range entries {
+		fd, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		target, err := os.Readlink(filepath.Join(l.fdDir, entry.Name()))
+		if err != nil || !strings.HasPrefix(target, usbfsPrefix) {
+			continue
+		}
+
+		candidates = append(candidates, fd)
+	}
+
+	return candidates, nil
 }
 
 // serialOf reads the USB serial number of the device fd refers to, or "" when

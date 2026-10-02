@@ -7,40 +7,59 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
 )
 
-// fakeUSBFS builds a locator over a fake /proc/self/fd and /sys/dev/char.
-// links maps descriptor names to what they point at; devices maps a
-// descriptor to the major:minor its duplicate reports, and serials maps
-// major:minor to the serial sysfs holds for it. Duplicates are the original
-// number plus 100, and the returned slice records which ones are still open.
-func fakeUSBFS(t *testing.T, links map[string]string, devices map[int][2]uint32,
+// fakeFDTable is a fake /proc/self/fd and /sys/dev/char that behaves like the
+// kernel where it matters here: a duplicate takes the lowest free descriptor
+// number from dupFrom up, and its link points where the original's does.
+type fakeFDTable struct {
+	t       *testing.T
+	fdDir   string
+	charDir string
+	// devices maps a link target to the major:minor of its device.
+	devices map[string][2]uint32
+	// dupFrom is the lowest number a duplicate may take.
+	dupFrom int
+	// closedAfterListing are descriptors that are gone by the time the scan
+	// duplicates anything, the way ReadDir's own one is.
+	closedAfterListing []string
+	// open lists the duplicates the scan has not closed.
+	open []int
+}
+
+func newFakeFDTable(t *testing.T, links map[string]string, devices map[string][2]uint32,
 	serials map[string]string,
-) (usbfsLocator, *[]int) {
+) *fakeFDTable {
 	t.Helper()
 
 	root := t.TempDir()
-	fdDir := filepath.Join(root, "fd")
-	charDir := filepath.Join(root, "char")
+	f := &fakeFDTable{
+		t:       t,
+		fdDir:   filepath.Join(root, "fd"),
+		charDir: filepath.Join(root, "char"),
+		devices: devices,
+		dupFrom: 100,
+	}
 
-	for _, dir := range []string{fdDir, charDir} {
+	for _, dir := range []string{f.fdDir, f.charDir} {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for name, target := range links {
-		if err := os.Symlink(target, filepath.Join(fdDir, name)); err != nil {
+		if err := os.Symlink(target, filepath.Join(f.fdDir, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for dev, serial := range serials {
-		node := filepath.Join(charDir, dev)
+		node := filepath.Join(f.charDir, dev)
 		if err := os.Mkdir(node, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -50,62 +69,123 @@ func fakeUSBFS(t *testing.T, links map[string]string, devices map[int][2]uint32,
 		}
 	}
 
-	open := &[]int{}
-	locator := usbfsLocator{
-		fdDir:   fdDir,
-		charDir: charDir,
-		dup: func(fd int) (int, error) {
-			*open = append(*open, fd+100)
-
-			return fd + 100, nil
-		},
-		close: func(fd int) error {
-			i := slices.Index(*open, fd)
-			if i < 0 {
-				t.Errorf("closed descriptor %d, which is not an open duplicate", fd)
-
-				return syscall.EBADF
-			}
-
-			*open = slices.Delete(*open, i, i+1)
-
-			return nil
-		},
-		rdev: func(fd int) (uint32, uint32, bool) {
-			dev, ok := devices[fd-100]
-
-			return dev[0], dev[1], ok
-		},
-	}
-
-	return locator, open
+	return f
 }
 
-// The station this was written for: the camera's usbfs file among a few
-// descriptors that are not usbfs, and a second USB device that is.
+func (f *fakeFDTable) link(fd int) string { return filepath.Join(f.fdDir, strconv.Itoa(fd)) }
+
+func (f *fakeFDTable) dup(fd int) (int, error) {
+	for _, name := range f.closedAfterListing {
+		_ = os.Remove(filepath.Join(f.fdDir, name))
+	}
+	f.closedAfterListing = nil
+
+	target, err := os.Readlink(f.link(fd))
+	if err != nil {
+		return -1, syscall.EBADF
+	}
+
+	n := f.dupFrom
+	for {
+		if _, err := os.Lstat(f.link(n)); os.IsNotExist(err) {
+			break
+		}
+		n++
+	}
+
+	if err := os.Symlink(target, f.link(n)); err != nil {
+		f.t.Fatal(err)
+	}
+
+	f.open = append(f.open, n)
+
+	return n, nil
+}
+
+func (f *fakeFDTable) close(fd int) error {
+	i := slices.Index(f.open, fd)
+	if i < 0 {
+		f.t.Errorf("closed descriptor %d, which is not an open duplicate", fd)
+
+		return syscall.EBADF
+	}
+
+	f.open = slices.Delete(f.open, i, i+1)
+
+	return os.Remove(f.link(fd))
+}
+
+func (f *fakeFDTable) rdev(fd int) (uint32, uint32, bool) {
+	target, err := os.Readlink(f.link(fd))
+	if err != nil {
+		return 0, 0, false
+	}
+
+	dev, ok := f.devices[target]
+
+	return dev[0], dev[1], ok
+}
+
+func (f *fakeFDTable) locator() usbfsLocator {
+	return usbfsLocator{fdDir: f.fdDir, charDir: f.charDir, dup: f.dup, close: f.close, rdev: f.rdev}
+}
+
+const (
+	cameraNode = "/dev/bus/usb/002/003"
+	pedalNode  = "/dev/bus/usb/001/004"
+)
+
+var (
+	stationDevices = map[string][2]uint32{cameraNode: {189, 130}, pedalNode: {189, 3}}
+	stationSerials = map[string]string{"189:130": "23485031", "189:3": "FOOTPEDAL"}
+)
+
+// The camera's usbfs file among a few descriptors that are not usbfs, and a
+// second USB device that is.
 func TestUSBFSFindsTheCameraBySerial(t *testing.T) {
-	locator, open := fakeUSBFS(t,
+	f := newFakeFDTable(t,
 		map[string]string{
 			"3":    "/dev/null",
-			"7":    "/dev/bus/usb/002/003",
-			"9":    "/dev/bus/usb/001/004",
-			"self": "/dev/bus/usb/002/003", // not a descriptor number
+			"7":    cameraNode,
+			"9":    pedalNode,
+			"self": cameraNode, // not a descriptor number
 		},
-		map[int][2]uint32{7: {189, 130}, 9: {189, 3}},
-		map[string]string{"189:130": "23485031", "189:3": "FOOTPEDAL"},
+		stationDevices, stationSerials,
 	)
 
-	fd, err := locator.usbfsFD("23485031")
+	fd, err := f.locator().usbfsFD("23485031")
 	if err != nil {
 		t.Fatalf("usbfsFD = %v", err)
 	}
 
-	if fd != 107 {
-		t.Errorf("usbfsFD = %d, want the duplicate of descriptor 7 (107)", fd)
+	if target, _ := os.Readlink(f.link(fd)); target != cameraNode {
+		t.Errorf("usbfsFD = %d, a duplicate of %q, want one of the camera", fd, target)
 	}
 
-	if !slices.Equal(*open, []int{107}) {
-		t.Errorf("open duplicates = %v, want only the returned one", *open)
+	if !slices.Equal(f.open, []int{fd}) {
+		t.Errorf("open duplicates = %v, want only the returned one", f.open)
+	}
+}
+
+// What happened on terminal2210004: ReadDir listed /proc/self/fd through
+// descriptor 43 and closed it, the camera was 27, and its duplicate became
+// 43. Reading link 43 only after that found the camera a second time, through
+// the scan's own duplicate, and refused it as ambiguous.
+func TestUSBFSDoesNotCountItsOwnDuplicate(t *testing.T) {
+	f := newFakeFDTable(t,
+		map[string]string{"27": cameraNode, "43": "/proc/1234/fd"},
+		stationDevices, stationSerials,
+	)
+	f.dupFrom = 43
+	f.closedAfterListing = []string{"43"}
+
+	fd, err := f.locator().usbfsFD("23485031")
+	if err != nil {
+		t.Fatalf("usbfsFD = %v", err)
+	}
+
+	if fd != 43 || !slices.Equal(f.open, []int{43}) {
+		t.Errorf("usbfsFD = %d with %v open, want the one duplicate 43", fd, f.open)
 	}
 }
 
@@ -116,27 +196,26 @@ func TestUSBFSRefusesNoAndTwoMatches(t *testing.T) {
 		wantErr error
 	}{
 		{name: "no device carries the serial", serial: "00000000", wantErr: errUSBFSNotFound},
-		// Two descriptors on the same device: the camera opened twice, or a
-		// second process-wide handle. Mapping on the wrong one would silently
-		// keep the kernel copy, so neither is picked.
+		// Two descriptors of their own on the same device: the camera opened
+		// twice. Mapping on the wrong one would silently keep the kernel
+		// copy, so neither is picked.
 		{name: "two descriptors carry it", serial: "23485031", wantErr: errUSBFSAmbiguous},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			locator, open := fakeUSBFS(t,
-				map[string]string{"7": "/dev/bus/usb/002/003", "8": "/dev/bus/usb/002/003"},
-				map[int][2]uint32{7: {189, 130}, 8: {189, 130}},
-				map[string]string{"189:130": "23485031"},
+			f := newFakeFDTable(t,
+				map[string]string{"7": cameraNode, "8": cameraNode},
+				stationDevices, stationSerials,
 			)
 
-			fd, err := locator.usbfsFD(tt.serial)
+			fd, err := f.locator().usbfsFD(tt.serial)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("usbfsFD = %d, %v, want %v", fd, err, tt.wantErr)
 			}
 
-			if len(*open) != 0 {
-				t.Errorf("duplicates left open: %v", *open)
+			if len(f.open) != 0 {
+				t.Errorf("duplicates left open: %v", f.open)
 			}
 		})
 	}
@@ -145,9 +224,9 @@ func TestUSBFSRefusesNoAndTwoMatches(t *testing.T) {
 // A camera without a serial number cannot be told apart from any other USB
 // device, so the search does not even start.
 func TestUSBFSNeedsASerial(t *testing.T) {
-	locator, _ := fakeUSBFS(t, nil, nil, nil)
+	f := newFakeFDTable(t, nil, nil, nil)
 
-	if _, err := locator.usbfsFD(""); err == nil {
+	if _, err := f.locator().usbfsFD(""); err == nil {
 		t.Error("usbfsFD(\"\") succeeded")
 	}
 }
