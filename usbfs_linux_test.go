@@ -28,6 +28,8 @@ type fakeFDTable struct {
 	// closedAfterListing are descriptors that are gone by the time the scan
 	// duplicates anything, the way ReadDir's own one is.
 	closedAfterListing []string
+	// failDup makes duplicating these descriptors fail.
+	failDup map[int]error
 	// open lists the duplicates the scan has not closed.
 	open []int
 }
@@ -75,6 +77,10 @@ func newFakeFDTable(t *testing.T, links map[string]string, devices map[string][2
 func (f *fakeFDTable) link(fd int) string { return filepath.Join(f.fdDir, strconv.Itoa(fd)) }
 
 func (f *fakeFDTable) dup(fd int) (int, error) {
+	if err := f.failDup[fd]; err != nil {
+		return -1, err
+	}
+
 	for _, name := range f.closedAfterListing {
 		_ = os.Remove(filepath.Join(f.fdDir, name))
 	}
@@ -218,6 +224,75 @@ func TestUSBFSRefusesNoAndTwoMatches(t *testing.T) {
 				t.Errorf("duplicates left open: %v", f.open)
 			}
 		})
+	}
+}
+
+// A descriptor closed after the listing is no concern of the scan's, but
+// running out of descriptors is: reporting that as "no device file" would send
+// whoever reads the log looking for the wrong problem.
+func TestUSBFSDuplicateFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantErr error
+	}{
+		{name: "closed in the meantime", err: syscall.EBADF},
+		{name: "out of descriptors", err: syscall.EMFILE, wantErr: syscall.EMFILE},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The camera matches first, so a failure afterwards has an open
+			// duplicate to release.
+			f := newFakeFDTable(t,
+				map[string]string{"7": cameraNode, "8": pedalNode},
+				stationDevices, stationSerials,
+			)
+			f.failDup = map[int]error{8: tt.err}
+
+			fd, err := f.locator().usbfsFD("23485031")
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("usbfsFD = %v, want the camera", err)
+				}
+				if !slices.Equal(f.open, []int{fd}) {
+					t.Errorf("open duplicates = %v, want only the returned one", f.open)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("usbfsFD = %d, %v, want %v", fd, err, tt.wantErr)
+			}
+			if len(f.open) != 0 {
+				t.Errorf("duplicates left open: %v", f.open)
+			}
+		})
+	}
+}
+
+// The duplicate is close-on-exec from the start; a child started by any
+// goroutine must never inherit the camera.
+func TestDupCloseOnExecSetsTheFlag(t *testing.T) {
+	f, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	dup, err := dupCloseOnExec(int(f.Fd()))
+	if err != nil {
+		t.Fatalf("dupCloseOnExec = %v", err)
+	}
+	defer syscall.Close(dup)
+
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(dup), syscall.F_GETFD, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if flags&syscall.FD_CLOEXEC == 0 {
+		t.Error("duplicate is not close-on-exec")
 	}
 }
 

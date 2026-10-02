@@ -51,8 +51,15 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"syscall"
 )
+
+// usbfsMu serialises NewUSBBuffer from finding the device file to closing its
+// duplicate. While one call holds a duplicate, it is one more descriptor on the
+// camera in /proc/self/fd, and a concurrent call would count it as a second
+// device file and refuse.
+var usbfsMu sync.Mutex
 
 // NewUSBBuffer allocates a buffer with room for size bytes of payload in
 // memory the USB host controller writes into directly, for a USB3 Vision
@@ -82,6 +89,8 @@ import (
 // USB3 Vision, its device file cannot be identified, or the kernel refuses the
 // mapping. NewBuffer still works then, so the usual response is to fall back
 // to it.
+//
+// It is safe to call from several goroutines; the calls take turns.
 func (c *Camera) NewUSBBuffer(size uint) (Buffer, error) {
 	if c.IsClosed() {
 		return Buffer{}, errors.New("aravis: camera is closed")
@@ -99,6 +108,9 @@ func (c *Camera) NewUSBBuffer(size uint) (Buffer, error) {
 	if err != nil {
 		return Buffer{}, fmt.Errorf("%w: read serial number: %w", ErrUSBBufferUnavailable, err)
 	}
+
+	usbfsMu.Lock()
+	defer usbfsMu.Unlock()
 
 	fd, err := systemUSBFS.usbfsFD(serial)
 	if err != nil {
