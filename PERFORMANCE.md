@@ -134,6 +134,69 @@ ptr, size := buffer.GetDataUnsafe()
 - `GetData` allocates a fresh `[]byte` per frame. At megabytes per frame and tens of
   frames per second, that is the single largest source of GC pressure in a naive loop.
 
+## USB3 Vision: Mapped Buffers
+
+### Problem
+
+`NewBuffer` allocates the payload in ordinary process memory. libusb hands the kernel's
+usbfs driver that address for every bulk transfer, and usbfs cannot DMA into it: it
+allocates a bounce buffer per transfer, zeroes it (`init_on_alloc`), receives the data
+into it and copies it out with `copy_to_user`. On a Basler acA1920-40uc at 25 fps that
+copy was the single largest item in a whole application's CPU profile, ahead of
+everything it did with the frames.
+
+### Solution
+
+```go
+stream, err := camera.CreateStream() // Aravis opens the device file by now
+if err != nil {
+    return err
+}
+
+for range 4 {
+    buffer, err := camera.NewUSBBuffer(payloadSize)
+    if errors.Is(err, aravis.ErrUSBBufferUnavailable) {
+        buffer, err = aravis.NewBuffer(payloadSize) // GigE, not Linux, budget spent, ...
+    }
+    if err != nil {
+        return err
+    }
+    if err := stream.PushBuffer(buffer); err != nil {
+        buffer.Close()
+        return err
+    }
+}
+```
+
+`NewUSBBuffer` maps the payload from the camera's usbfs device file, which is what
+`libusb_dev_mem_alloc` does. The controller then writes into it directly, and the bounce
+buffer, its zeroing and the copy are gone. The buffer is used and owned exactly like one
+from `NewBuffer`.
+
+- **It has to be Aravis's own descriptor.** The kernel only recognises a mapping made on
+  the same open file the transfers are submitted on. Aravis 0.8 keeps its libusb handle
+  private, so `NewUSBBuffer` finds the descriptor in `/proc/self/fd` by the camera's
+  serial number in sysfs, and refuses when there is not exactly one. Aravis 0.9 does
+  this natively, through `arv_stream_create_buffers`.
+- **The memory counts against `usbcore.usbfs_memory_mb`**, 16 MB by default and shared
+  by every usbfs user on the machine. Four buffers of a 1936x1216 RGB8 payload are
+  28 MB, so raise it (for example `usbcore.usbfs_memory_mb=1000` on the kernel command
+  line) or the mapping fails with ENOMEM.
+- **It relies on Aravis's asynchronous USB mode**, the default since 0.8.28, in which
+  every payload transfer points straight into the buffer.
+
+### What this buys you
+
+On a Basler acA1920-40uc streaming 1936x1216 BayerRG8 at 25 fps, with Aravis 0.8.30:
+
+| Buffers | Kernel time per 15 s | Acquisition CPU |
+|---|---|---|
+| `NewBuffer` | 0.72 s | 0.055 cores |
+| `NewUSBBuffer` | 0.18 s | 0.020 cores |
+
+The frames were identical, and none failed in either run. On a machine whose memory bus is
+busy with other work, the copy costs more than this, and the mapped buffer saves more.
+
 ## Error Handling
 
 This is a correctness feature, not a performance one. Earlier revisions of this document

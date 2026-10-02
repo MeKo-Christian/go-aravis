@@ -12,16 +12,17 @@ import (
 // errors.Is.
 func sentinels() map[string]error {
 	return map[string]error{
-		"ErrTimeout":          ErrTimeout,
-		"ErrNoBuffer":         ErrNoBuffer,
-		"ErrNegativeTimeout":  ErrNegativeTimeout,
-		"ErrNilStream":        ErrNilStream,
-		"ErrStreamClosed":     ErrStreamClosed,
-		"ErrNilBuffer":        ErrNilBuffer,
-		"ErrBufferNotOwned":   ErrBufferNotOwned,
-		"ErrBufferAllocation": ErrBufferAllocation,
-		"ErrPartOutOfRange":   ErrPartOutOfRange,
-		"ErrPartNotImage":     ErrPartNotImage,
+		"ErrTimeout":              ErrTimeout,
+		"ErrNoBuffer":             ErrNoBuffer,
+		"ErrNegativeTimeout":      ErrNegativeTimeout,
+		"ErrNilStream":            ErrNilStream,
+		"ErrStreamClosed":         ErrStreamClosed,
+		"ErrNilBuffer":            ErrNilBuffer,
+		"ErrBufferNotOwned":       ErrBufferNotOwned,
+		"ErrBufferAllocation":     ErrBufferAllocation,
+		"ErrPartOutOfRange":       ErrPartOutOfRange,
+		"ErrPartNotImage":         ErrPartNotImage,
+		"ErrUSBBufferUnavailable": ErrUSBBufferUnavailable,
 	}
 }
 

@@ -79,4 +79,13 @@ var (
 	// an image, extended chunk data or multipart, and whose part is a 2D or 3D
 	// image, one of their planar variants, or a confidence map.
 	ErrPartNotImage = errors.New("aravis: buffer part is not an image")
+
+	// ErrUSBBufferUnavailable reports that [Camera.NewUSBBuffer] cannot map
+	// usbfs memory for this camera: it is not a USB3 Vision device, this is
+	// not Linux, its usbfs device file cannot be identified unambiguously, or
+	// the kernel refused the mapping (ENOMEM usually means the
+	// usbcore.usbfs_memory_mb budget is spent). It is always wrapped with the
+	// reason. [NewBuffer] still works in every one of these cases; it only
+	// costs the kernel copy the mapped buffer avoids.
+	ErrUSBBufferUnavailable = errors.New("aravis: usbfs-mapped buffer unavailable")
 )

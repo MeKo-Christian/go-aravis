@@ -723,6 +723,9 @@ map. Run `go doc github.com/MeKo-Christian/go-aravis` for the full surface.
 **Buffer Ownership**:
 
 - `NewBuffer(size)` - Allocate a buffer the caller owns
+- `Camera.NewUSBBuffer(size)` - The same for a USB3 Vision camera on Linux, in memory
+  the USB controller writes into directly, which saves the kernel a copy per transfer;
+  falls back via `ErrUSBBufferUnavailable` (see [PERFORMANCE.md](PERFORMANCE.md))
 - `Close() / IsClosed()` - Release a buffer the caller owns; idempotent across copies.
   A buffer is released either by pushing it to a stream or by closing it — exactly one
   of the two.
